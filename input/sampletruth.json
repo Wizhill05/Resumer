@@ -1,0 +1,87 @@
+{
+  "personal_information": {
+    "name": "Alex Rivera",
+    "phone": "+1 555-012-3456",
+    "location": "San Francisco, CA 94105",
+    "email": "alex.rivera.dev@example.com",
+    "linkedin": "linkedin.com/in/alex-rivera-sample/",
+    "github": "github.com/alexrivera-dev"
+  },
+  "photo": {
+    "link": "https://example.com/images/sample-profile-placeholder.jpg"
+  },
+  "objective": "3rd Year BTech Student very keen in understanding the inner workings of Deep Learning models and their agentic applications. I keep up with all the recent research papers related to AI and am determined to make this as my career.",
+  "education": [
+    {
+      "degree": "BTech in AI & Machine Learning",
+      "institution": "Global Institute of Technology",
+      "duration": "September 2023- Present"
+    }
+  ],
+  "skills": {
+    "programming_languages": [
+      "Python",
+      "CUDA C++",
+      "SQL",
+      "Dart",
+      "Java",
+      "Javascript"
+    ],
+    "deep_learning_and_ai": [
+      "PyTorch",
+      "TensorFlow",
+      "Gemini/OpenAI APIs",
+      "ollama",
+      "LMStudio",
+      "NLP"
+    ],
+    "machine_learning_and_data": [
+      "NumPy",
+      "Pandas",
+      "Prompt Engg.",
+      "Agentic AI",
+      "Text/Data Processing"
+    ],
+    "web_and_app_dev": [
+      "React",
+      "Flutter",
+      "NextJS",
+      "Vercel Hosting",
+      "CDNs like Cloudinary"
+    ],
+    "spoken_languages": ["English", "Spanish"]
+  },
+  "projects": [
+    {
+      "name": "Nexus Chat",
+      "technologies": ["Large Language Models", "DBMS"],
+      "description": "A Context Management System for Running LLMS Locally on device using llama.cpp and CUDA. Manages Different Context Windows or \"chats\" with a credit based Multi-User Management system which can be deployed to the whole world or in a private controlled environment.",
+      "link": "github.com/alexrivera-dev/nexus-chat"
+    },
+    {
+      "name": "Lumina CUDA",
+      "technologies": ["C++", "CUDA", "ImGui"],
+      "description": "A real-time GPU-accelerated math function visualizer in C++/CUDA parallelizing computation across 777,600 pixels (1080x720) using 256 CUDA threads per block (16x16), with an ImGui overlay for live control.",
+      "link": "github.com/alexrivera-dev/Lumina"
+    },
+    {
+      "name": "Echo Core - Agentic AI",
+      "technologies": ["Flutter", "Natural Language Processing", "Tensorflow"],
+      "description": "Flutter Application that takes Voice Commands and uses Natural Language Processing to classify and act accordingly. Uses a Locally running Tensorflow Model trained on a Fully Custom Dataset of over 10,000 commands ranging from \"Set an alarm\" to \"Add 100 and 40\" and many more.",
+      "link": "github.com/alexrivera-dev/echo_core"
+    }
+  ],
+  "experience": [
+    {
+      "role": "Technical Lead",
+      "organization": "TechFest University",
+      "location": "Remote",
+      "duration": "Jan 2025 - Feb 2025",
+      "technologies": ["React-three-fiber", "Web Application Development"],
+      "responsibilities": [
+        "Worked with a Team of 20 People to make a Web Application with 1000s of daily users for event registrations and quiz management for over 40 events during college fest.",
+        "Implemented a 3D Environment for showcasing Artists (Pronites) using React-three-fiber with all self-made custom 3D assets."
+      ]
+    }
+  ]
+}

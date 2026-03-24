@@ -1,1 +1,6 @@
-truth.json
+input/truth.json
+.env.local
+uv.lock
+.venv/
+__pycache__/
+output/

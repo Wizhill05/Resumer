@@ -12,13 +12,9 @@
     </div>
   </div>
   <div style="margin-left: 20px;">
-    <img src="https://as2.ftcdn.net/v2/jpg/02/41/59/35/1000_F_241593516_pXpTDBa70ebQHSUuWY1G3XYhrz1CL2x0.jpg" alt="Profile Photo" style="width: 100px; height: 100px; object-fit: cover; border: 1px solid #ccc; padding: 4px; background-color: white;">
+    <img src="https://as2.ftcdn.net/v2/jpg/02/41/59/35/1000_F_241593516_pXpTDBa70ebQHSUuWY1G3XYhrz1CL2x0.jpg" alt="Profile Photo" style="width: 80px; height: 100px; object-fit: cover; border: 1px solid #ccc; padding: 4px; background-color: white;">
   </div>
 </div>
-
-## Objective
-
-Software Engineer with 2+ years of experience in XXX, seeking full-time XXX roles.
 
 ## Education
 

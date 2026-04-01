@@ -1,0 +1,66 @@
+write_resume:
+  description: >
+    Given the candidate's master profile and a target job description, produce a
+    tailored resume AND compile it to PDF.
+
+    Step 1 — Draft the resume content following these rules:
+    - The objective must be 1-2 sentences, tailored to the specific role.
+    - Select a minimum of 2 projects most relevant to the job. For each, write 2-3 tight,
+      quantified bullet points.
+    - Each bullet point should contain numerical values showing real-world
+      impact. For example, instead of "Improved performance", write "Improved
+      performance by 20%".
+    - Make the project titles clickable and lead to the github links(only if availiable)
+    - Do not include projects that are not relevant to the job.
+    - Group skills into 3-4 meaningful categories. Only include skills relevant
+      to the target job.
+    - Include 2-3 experience entries only if relevant. 2-3 bullets each.
+    - Total content MUST fit on ONE A4 page when rendered. Be ruthlessly concise.
+    - You MUST include the "Extra-Curricular Activities & Leadership" section, grouping
+      achievements from the profile by topics
+      such as 'Leadership' or 'Teamwork'. Do not skip this section.
+
+    Step 2 — Once you have the resume JSON, use the "Compile Resume PDF" tool
+    immediately. Pass the full resume JSON as `resume_json` and "{iteration}" as
+    `iteration`. Do NOT skip this step.
+
+    Candidate Profile:
+    {profile_json}
+
+    Target Job Description:
+    {job_description}
+  expected_output: >
+    A message confirming the PDF was compiled, including the output path and
+    page count. The draft PDF must exist in the output folder before this task
+    completes.
+  agent: resume_writer
+
+shorten_resume:
+  description: >
+    The previous resume draft overflows by {overflow_lines} rendered lines.
+    Your goal is to help it fit on ONE page. 
+
+    HOWEVER, you must be extremely conservative. You are ONLY allowed to make 
+    EXACTLY ONE logical cut or modification during this turn. Do NOT try to fix 
+    the entire {overflow_lines} overflow in one go.
+
+    Choose EXACTLY ONE of the following actions to perform this turn:
+    1. Shorten just 1 or 2 wordy bullet points (condense them to a single tight line).
+    2. OR, lightly condense the Extra-Curricular / Activities section.
+    3. OR, (ONLY if overflow is > 4 lines), remove the single least-relevant project or experience entry.
+
+    Once you have made your SINGLE chosen edit, STOP. 
+    Maintain all existing formatting and data for everything else. We are using an iterative loop, so we will check the new page count and call you again if more trimming is still needed.
+
+    Resume JSON to trim:
+    {previous_json}
+
+    Target Job Description (for relevance decisions):
+    {job_description}
+
+    Once trimmed, use the "Compile Resume PDF" tool with the new JSON and
+    "{iteration}" as the iteration number.
+  expected_output: >
+    A confirmation that the trimmed PDF was compiled, including the output path
+    and page count. State exactly how many lines you removed and what you cut.
+  agent: resume_shortener

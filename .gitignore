@@ -4,3 +4,4 @@ uv.lock
 .venv/
 __pycache__/
 output/
+outputs/

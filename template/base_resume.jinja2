@@ -1,0 +1,91 @@
+<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+  <div style="text-align: left; flex: 1;">
+    <h1 style="margin: 0 0 4px 0; text-align: left; line-height: 1;">{{ profile.personal_information.name }}</h1>
+{% if resume.applying_for %}
+    <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 6px;">Applying for: {{ resume.applying_for }}</div>
+{% endif %}
+    <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.88em;">
+      <span><span class="iconify" data-icon="tabler:phone"></span> {{ profile.personal_information.phone }}</span> |
+      <span><span class="iconify" data-icon="tabler:mail"></span> <a href="mailto:{{ profile.personal_information.email }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.email }}</a></span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.88em;">
+      <span><span class="iconify" data-icon="tabler:brand-linkedin"></span> <a href="https://{{ profile.personal_information.linkedin }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.linkedin }}</a></span> |
+      <span><span class="iconify" data-icon="tabler:brand-github"></span> <a href="https://{{ profile.personal_information.github }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.github }}</a></span>
+    </div>
+  </div>
+{% if profile.photo and profile.photo.link %}
+  <div style="margin-left: 16px;">
+    <img src="{{ profile.photo.link }}" alt="Profile Photo"
+         style="width: 80px; height: 100px; object-fit: cover;
+                border: 1px solid #ccc; padding: 3px; background-color: white;">
+  </div>
+{% endif %}
+</div>
+
+{% if resume.objective %}
+
+## Objective
+
+{{ resume.objective }}
+{% endif %}
+{% if profile.education %}
+
+## Education
+{% for edu in profile.education %}
+
+**{{ edu.degree }}**
+~ {{ edu.institution }}
+~ {{ edu.duration }}
+{% endfor %}
+{% endif %}
+
+{% if resume.skills %}
+
+## Skills
+{% for skill_group in resume.skills %}
+
+**{{ skill_group.category }}:** {{ skill_group.items | join(', ') }}
+{% endfor %}
+{% endif %}
+
+{% if resume.projects %}
+
+## Projects
+{% for project in resume.projects %}
+
+{% if project.link %}
+**[{{ project.name }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})**
+{% else %}
+**{{ project.name }}**
+{% endif %}
+{{ project.tech_stack }}
+{% for bullet in project.bullets %}
+- {{ bullet }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if resume.experience %}
+
+## Experience
+{% for exp in resume.experience %}
+
+**{{ exp.role }}**
+~ {{ exp.duration }}
+{{ exp.organization }}
+~ {{ exp.location }}
+{% for bullet in exp.bullets %}
+- {{ bullet }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if resume.activities %}
+
+## Extra-Curricular Activities & Leadership
+{% for activity in resume.activities %}
+
+**{{ activity.topic }}**
+{% for bullet in activity.bullets %}
+- {{ bullet }}
+{% endfor %}
+{% endfor %}
+{% endif %}

@@ -1,16 +1,4 @@
-Paste the full job description here before running agent_loop.py.
-
-Example:
----
-Software Engineer – Backend
+Front End Designer
 Company: XYZ Corp
 
-We are looking for a backend engineer with experience in Python, REST APIs,
-and cloud infrastructure. You will design and build scalable microservices,
-collaborate with frontend teams, and own deployment pipelines.
-
-Requirements:
-- 2+ years Python experience
-- Familiarity with FastAPI or Django
-- Experience with PostgreSQL and Redis
-- Bonus: Kubernetes, GCP/AWS
+We are looking for a front end designer with experience in ReactJS, NodeJS, Firebase and boolean queries. they shouldd also be good in figma. You will design and build scalable microservices, collaborate with frontend teams, and own deployment pipelines.

@@ -254,10 +254,10 @@ def generate_pdf(
             path=str(output_path),
             format="A4",
             margin={
-                "top": "0.4cm",
-                "bottom": "0.4cm",
-                "left": "0.8cm",
-                "right": "0.8cm",
+                "top": "0.2cm",
+                "bottom": "0.2cm",
+                "left": "0.4cm",
+                "right": "0.4cm",
             },
             print_background=True,
         )

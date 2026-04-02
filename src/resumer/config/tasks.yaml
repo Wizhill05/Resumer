@@ -4,17 +4,18 @@ write_resume:
     tailored resume AND compile it to PDF.
 
     Step 1 — Draft the resume content following these rules:
-    - The objective must be 1-2 sentences, tailored to the specific role.
-    - Select a minimum of 2 projects most relevant to the job. For each, write 2-3 tight,
-      quantified bullet points.
-    - Each bullet point should contain numerical values showing real-world
-      impact. For example, instead of "Improved performance", write "Improved
-      performance by 20%".
-    - Make the project titles clickable and lead to the github links(only if availiable)
+    - The PROFESSIONAL SUMMARY must be 1-2 lines, explaining why you are a good fit for the job and giving a summary. For example: "Experienced Project Focused Software engineering student seeking full time Front end development".
+    - Select 2-3 projects most relevant to the job. Prefer 3 projects if 3 or more are related to the job's theme. For each, write a description paragraph that fills exactly 2 rendered lines, mentioning the relevant project tech stack, statistics, and what the project does. For example: "Maintainer and lead engineer for Docusaurus v2 - a React based static site generator which powers the documentation of many of Meta's Open Source Projects — React Native, Jest, Relay, Reason, etc. Used by 7.6k projects on GitHub."
+    - Provide the project's GitHub path (e.g. `username/repo`) if available, to be made clickable next to the title.
     - Do not include projects that are not relevant to the job.
-    - Group skills into 3-4 meaningful categories. Only include skills relevant
-      to the target job.
-    - Include 2-3 experience entries only if relevant. 2-3 bullets each.
+    - STRICT ANTI-HALLUCINATION RULE: Do not invent or hallucinate any projects, experience, or skills! You must ONLY use the exact projects listed in the candidate profile.
+    - Do not add generic or irrelevant skills based on the job profile.
+    - Group skills into 2-3 categories with 3-5 items each. Be very selective — only include skills that directly appear in or are closely related to the job description. Fewer, highly relevant skills are better than many generic ones.
+    - DYNAMIC BALANCE RULE: Assess how many relevant projects vs relevant experience the candidate has for the job. If the candidate has more relevant projects than experience, favor projects — include up to 3 projects. If the candidate has strong relevant experience, include 2-3 experience entries and 2 projects. You MUST always include a minimum of 2 experience entries (including the Independent Work entry if needed).
+    - INDEPENDENT WORK RULE: If you cannot find enough relevant formal work experience for the job, you are allowed to create a self-titled experience entry such as "AI Developer" at "Independent Projects" with location from the profile and duration "2025 - Present". Use 2-3 bullets that summarize your most relevant independent project work (drawn ONLY from the profile's projects). IMPORTANT: Do NOT repeat or duplicate any data already included in the Projects section — the bullets here must cover different aspects, achievements, or projects than what appears above.
+    - For experience entries, include 2-3 bullets each.
+    - Do not add any unrelated experience or projects. For example, do not add web dev experience if the job is for AI engineer unless mentioned in the job description.
+    - KEYWORD MIRRORING RULE: Throughout the entire resume, use the exact words and phrases from the job description. Do NOT abbreviate or paraphrase them. For example, if the JD says "Natural Language Processing", write "Natural Language Processing" — never "NLP". If the JD says "Machine Learning", do not write "ML". Mirror the JD's terminology exactly.
     - Total content MUST fit on ONE A4 page when rendered. Be ruthlessly concise.
     - You MUST include the "Extra-Curricular Activities & Leadership" section, grouping
       achievements from the profile by topics
@@ -45,11 +46,11 @@ shorten_resume:
     the entire {overflow_lines} overflow in one go.
 
     Choose EXACTLY ONE of the following actions to perform this turn:
-    1. Shorten just 1 or 2 wordy bullet points (condense them tighter) from EITHER the Projects or Experience section. Both sections have equal value—trim from whichever is least relevant to the job.
-    2. OR, completely remove ONE bullet point from EITHER the Projects or Experience section. Priority between the two is equal.
+    1. Shorten a project's description paragraph OR shorten 1 or 2 wordy bullet points from the Experience section. Both sections have equal value—trim from whichever is least relevant to the job.
+    2. OR, completely remove ONE bullet point from the Experience section or significantly cut down the project's description. Priority between the two is equal.
     3. OR, lightly condense the Extra-Curricular / Activities section.
 
-    CRITICAL RULE: Under NO circumstances are you allowed to cut the entire Projects section or the entire Experience section. You may ONLY cut or condense specific bullet points within them.
+    CRITICAL RULE: Under NO circumstances are you allowed to cut the entire Projects section or the entire Experience section. You may ONLY cut or condense specific descriptions or bullet points within them.
 
     Once you have made your SINGLE chosen edit, STOP. 
     Maintain all existing formatting and data for everything else. We are using an iterative loop, so we will check the new page count and call you again if more trimming is still needed.

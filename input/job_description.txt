@@ -1,4 +1,2 @@
-Front End Designer
-Company: XYZ Corp
-
-We are looking for a front end designer with experience in ReactJS, NodeJS, Firebase and boolean queries. they shouldd also be good in figma. You will design and build scalable microservices, collaborate with frontend teams, and own deployment pipelines.
+AI Engineer
+We are looking for an AI Engineer with experience in Python, Machine Learning, Deep Learning, and Natural Language Processing. You will design, build, and deploy AI models, collaborate with cross-functional teams, and contribute to cutting-edge AI solutions.

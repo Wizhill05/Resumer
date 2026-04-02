@@ -6,11 +6,11 @@
 {% endif %}
     <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.88em;">
       <span><span class="iconify" data-icon="tabler:phone"></span> {{ profile.personal_information.phone }}</span> |
-      <span><span class="iconify" data-icon="tabler:mail"></span> <a href="mailto:{{ profile.personal_information.email }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.email }}</a></span>
+      <span><span class="iconify" data-icon="tabler:mail"></span> <a href="mailto:{{ profile.personal_information.email }}">{{ profile.personal_information.email }}</a></span>
     </div>
     <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.88em;">
-      <span><span class="iconify" data-icon="tabler:brand-linkedin"></span> <a href="https://{{ profile.personal_information.linkedin }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.linkedin }}</a></span> |
-      <span><span class="iconify" data-icon="tabler:brand-github"></span> <a href="https://{{ profile.personal_information.github }}" style="text-decoration: none; color: inherit;">{{ profile.personal_information.github }}</a></span>
+      <span><span class="iconify" data-icon="tabler:brand-linkedin"></span> <a href="https://{{ profile.personal_information.linkedin }}">{{ profile.personal_information.linkedin }}</a></span> |
+      <span><span class="iconify" data-icon="tabler:brand-github"></span> <a href="https://{{ profile.personal_information.github }}">{{ profile.personal_information.github }}</a></span>
     </div>
   </div>
 {% if profile.photo and profile.photo.link %}
@@ -24,13 +24,13 @@
 
 {% if resume.objective %}
 
-## Objective
+## PROFESSIONAL SUMMARY
 
 {{ resume.objective }}
 {% endif %}
 {% if profile.education %}
 
-## Education
+## EDUCATION
 {% for edu in profile.education %}
 
 **{{ edu.degree }}**
@@ -41,32 +41,36 @@
 
 {% if resume.skills %}
 
-## Skills
+## SKILLS
+<table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
 {% for skill_group in resume.skills %}
-
-**{{ skill_group.category }}:** {{ skill_group.items | join(', ') }}
+  <tr>
+    <td style="font-weight: bold; width: 28%; vertical-align: top; padding: 1px 0;">{{ skill_group.category }}</td>
+    <td style="vertical-align: top; padding: 1px 0;">{{ skill_group.items | join(', ') }}</td>
+  </tr>
 {% endfor %}
+</table>
 {% endif %}
 
 {% if resume.projects %}
 
-## Projects
+## PROJECTS
 {% for project in resume.projects %}
 
-{% if project.link %}
-**[{{ project.name }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})**
+{% if project.github_path and project.link %}
+**{{ project.name }}** | [{{ project.github_path }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
+{% elif project.link %}
+**{{ project.name }}** | [{{ project.link | replace('https://', '') | replace('http://', '') | replace('www.', '') }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
 {% else %}
 **{{ project.name }}**
 {% endif %}
-{{ project.tech_stack }}
-{% for bullet in project.bullets %}
-- {{ bullet }}
-{% endfor %}
+
+{{ project.description }}
 {% endfor %}
 {% endif %}
 {% if resume.experience %}
 
-## Experience
+## EXPERIENCE
 {% for exp in resume.experience %}
 
 **{{ exp.role }}**
@@ -80,7 +84,7 @@
 {% endif %}
 {% if resume.activities %}
 
-## Extra-Curricular Activities & Leadership
+## EXTRA-CURRICULAR ACTIVITIES & ACHIEVEMENTS
 {% for activity in resume.activities %}
 
 **{{ activity.topic }}**

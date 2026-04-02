@@ -117,11 +117,14 @@ def compile_pdf(resume_json: str, iteration: str) -> str:
 
     # Compile PDF
     pdf_path = output_dir / f"draft_v{iteration}.pdf"
-    generate_pdf(
+    _, content_height = generate_pdf(
         md_path=str(md_path),
         css_path=str(TEMPLATE_CSS),
         output_path=str(pdf_path),
     )
+
+    # Store content height so main.py can detect underflow
+    _shared_state["last_content_height"] = content_height
 
     page_count = _get_page_count(pdf_path)
     return f"PDF compiled: {pdf_path.resolve()}\nPage count: {page_count}"

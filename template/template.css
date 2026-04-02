@@ -1,4 +1,5 @@
 /* Backbone CSS for Resume Template 1 */
+@import url('https://cdn.jsdelivr.net/gh/dreampulse/computer-modern-web-font@master/fonts.css');
 
 /* Basic */
 
@@ -10,6 +11,12 @@
   -ms-hyphens: auto;
   -webkit-hyphens: auto;
   hyphens: auto;
+  font-family: "Computer Modern Serif", serif;
+}
+
+#resume-preview a {
+  color: #1A0DAB;
+  text-decoration: none;
 }
 
 #resume-preview p,

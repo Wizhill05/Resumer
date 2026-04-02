@@ -133,12 +133,12 @@ def _build_html(md_path: Path, css_path: Path) -> str:
 
     # 5. Print-friendly base styles
     base_css = textwrap.dedent("""
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif:wght@400;600;700&display=swap');
+        @import url('https://cdn.jsdelivr.net/gh/dreampulse/computer-modern-web-font@master/fonts.css');
 
         * { box-sizing: border-box; }
 
         body {
-            font-family: 'Noto Serif', Arial, serif;
+            font-family: 'Computer Modern Serif', serif;
             font-size: 10pt;
             line-height: 1.5;
             margin: 0;
@@ -147,7 +147,7 @@ def _build_html(md_path: Path, css_path: Path) -> str:
             background: white;
         }
 
-        a { color: inherit; text-decoration: none; }
+        a { color: #1A0DAB; text-decoration: none; }
 
         .resume-header { text-align: center; margin-bottom: 1em; }
         .resume-header h1 { margin: 0 0 6px; }
@@ -205,7 +205,7 @@ def generate_pdf(
     md_path: str | Path = "template/template.md",
     css_path: str | Path = "template/template.css",
     output_path: str | Path = "output/resume.pdf",
-) -> Path:
+) -> tuple[Path, int]:
     """
     Generate a PDF resume from a Markdown template and a CSS stylesheet.
 
@@ -220,7 +220,7 @@ def generate_pdf(
 
     Returns
     -------
-    Path to the generated PDF file.
+    Tuple of (Path to the generated PDF file, content height in pixels).
     """
     from playwright.sync_api import sync_playwright  # lazy import
 
@@ -250,6 +250,9 @@ def generate_pdf(
             timeout=10_000,
         )
 
+        # Measure the content height before generating the PDF
+        content_height = page.evaluate("() => document.body.scrollHeight")
+
         page.pdf(
             path=str(output_path),
             format="A4",
@@ -264,7 +267,7 @@ def generate_pdf(
         browser.close()
 
     print(f"✅  PDF written to: {output_path.resolve()}")
-    return output_path
+    return output_path, content_height
 
 
 # ---------------------------------------------------------------------------

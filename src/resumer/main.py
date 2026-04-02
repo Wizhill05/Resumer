@@ -161,7 +161,7 @@ def main() -> None:
     data_path = BASE_DIR / args.data
     template_css = BASE_DIR / "template" / "template.css"
 
-    _banner("🤖  Resume Agent v3 — CrewAI + Gemini 2.5 Flash")
+    _banner("🤖  Resume Agent v3 — CrewAI")
 
     # ── Validate inputs ──────────────────────────────────────────────────
     for p in [jd_path, data_path, template_css]:
@@ -218,140 +218,179 @@ def main() -> None:
         _get_overflow_lines,
     )
 
-    crew_instance = ResumerCrew()
-    final_result = None
-    current_json = ""
-    overflow_lines = 0
+    from src.resumer.tools.pdf_tools import _shared_state
 
-    for iteration in range(1, args.max_iterations + 1):
-        _info(f"Draft iteration {iteration}/{args.max_iterations}…")
+    MAX_RUN_ATTEMPTS = 3
+    final_success = False
 
-        if iteration == 1:
-            inputs = {
-                "profile_json": json.dumps(profile, indent=2),
-                "job_description": jd,
-                "output_dir": str(output_dir),
-                "iteration": str(iteration),
-            }
-            result = crew_instance.writing_crew().kickoff(inputs=inputs)
-        else:
-            inputs = {
-                "job_description": jd,
-                "output_dir": str(output_dir),
-                "iteration": str(iteration),
-                "overflow_lines": str(overflow_lines),
-                "previous_json": current_json,
-            }
-            result = crew_instance.shortening_crew().kickoff(inputs=inputs)
+    for run_attempt in range(1, MAX_RUN_ATTEMPTS + 1):
+        if run_attempt > 1:
+            _info(
+                f"Restarting generation from scratch (Attempt {run_attempt}/{MAX_RUN_ATTEMPTS})..."
+            )
 
-        # Extract Pydantic structured output or fallback to raw JSON
-        task_output = (
-            result.tasks_output[-1]
-            if hasattr(result, "tasks_output") and result.tasks_output
-            else None
-        )
-        if task_output and hasattr(task_output, "pydantic") and task_output.pydantic:
-            current_json = task_output.pydantic.model_dump_json()
-        elif task_output:
-            current_json = getattr(task_output, "raw", "") or ""
-        else:
-            _err("Could not extract output from crew agent!")
-            break
+        crew_instance = ResumerCrew()
+        final_result = None
+        current_json = ""
+        overflow_lines = 0
 
-        # ── Apply CLI omission flags BEFORE PDF compilation ────────────
-        try:
-            temp_data = json.loads(current_json)
-            if args.no_objective:
-                temp_data["objective"] = None
-            if args.no_skills:
-                temp_data["skills"] = None
-            if args.no_projects:
-                temp_data["projects"] = None
-            if args.no_experience:
-                temp_data["experience"] = None
-            if args.no_activities:
-                temp_data["activities"] = None
-            if args.no_applying_for:
-                temp_data["applying_for"] = None
-            current_json = json.dumps(temp_data, indent=2)
-        except Exception as e:
-            _warn(f"Failed to apply omission flags: {e}")
+        for iteration in range(1, args.max_iterations + 1):
+            _info(f"Draft iteration {iteration}/{args.max_iterations}…")
 
-        # ── Deterministic PDF compilation & check ──────────────────────
-        compile_pdf.func(current_json, str(iteration))
-        pdf_path = output_dir / f"draft_v{iteration}.pdf"
+            if iteration == 1:
+                inputs = {
+                    "profile_json": json.dumps(profile, indent=2),
+                    "job_description": jd,
+                    "output_dir": str(output_dir),
+                    "iteration": str(iteration),
+                }
+                result = crew_instance.writing_crew().kickoff(inputs=inputs)
+            else:
+                inputs = {
+                    "job_description": jd,
+                    "output_dir": str(output_dir),
+                    "iteration": str(iteration),
+                    "overflow_lines": str(overflow_lines),
+                    "previous_json": current_json,
+                }
+                result = crew_instance.shortening_crew().kickoff(inputs=inputs)
 
-        if not pdf_path.exists():
-            _err(f"PDF missing: {pdf_path}")
-            break
+            # Extract Pydantic structured output or fallback to raw JSON
+            task_output = (
+                result.tasks_output[-1]
+                if hasattr(result, "tasks_output") and result.tasks_output
+                else None
+            )
+            if (
+                task_output
+                and hasattr(task_output, "pydantic")
+                and task_output.pydantic
+            ):
+                current_json = task_output.pydantic.model_dump_json()
+            elif task_output:
+                current_json = getattr(task_output, "raw", "") or ""
+            else:
+                _err("Could not extract output from crew agent!")
+                break
 
-        pages = _get_page_count(pdf_path)
-        overflow_lines = _get_overflow_lines(pdf_path)
-
-        if pages == 1:
-            _ok(f"Iteration {iteration}: Resume fits perfectly on 1 page! ✅")
-            break
-
-        _warn(f"Iteration {iteration}: OVERFLOW ({overflow_lines} rendered lines).")
-
-        # ── Middle-Man Logic: Objective stripping ──────────────────────
-        if overflow_lines > 3:
-            _info("⚙️ Middle-man: Overflow > 3 lines. Testing objective removal...")
+            # ── Apply CLI omission flags BEFORE PDF compilation ────────────
             try:
-                data = json.loads(current_json)
-                if data.get("objective"):
-                    data["objective"] = None
-                    current_json = json.dumps(data, indent=2)
-
-                    # Recompile & recheck
-                    compile_pdf.func(current_json, f"{iteration}_no_obj")
-                    pdf_path = output_dir / f"draft_v{iteration}_no_obj.pdf"
-
-                    pages = _get_page_count(pdf_path)
-                    overflow_lines = _get_overflow_lines(pdf_path)
-
-                    if pages == 1:
-                        _ok(
-                            "⚙️ Middle-man fixed the overflow by removing the objective! ✅"
-                        )
-                        break
-                    else:
-                        _warn(
-                            f"⚙️ Middle-man: Still overflow ({overflow_lines} lines) without objective. Handing to shortener..."
-                        )
-                else:
-                    _info("⚙️ Middle-man: Objective already removed or empty.")
+                temp_data = json.loads(current_json)
+                if args.no_objective:
+                    temp_data["objective"] = None
+                if args.no_skills:
+                    temp_data["skills"] = None
+                if args.no_projects:
+                    temp_data["projects"] = None
+                if args.no_experience:
+                    temp_data["experience"] = None
+                if args.no_activities:
+                    temp_data["activities"] = None
+                if args.no_applying_for:
+                    temp_data["applying_for"] = None
+                current_json = json.dumps(temp_data, indent=2)
             except Exception as e:
-                _err(f"⚙️ Middle-man JSON error: {e}")
-    else:
-        _warn(
-            f"Reached max iterations ({args.max_iterations}) without fitting on 1 page."
-        )
+                _warn(f"Failed to apply omission flags: {e}")
+
+            # ── Deterministic PDF compilation & check ──────────────────────
+            compile_pdf.func(current_json, str(iteration))
+            pdf_path = output_dir / f"draft_v{iteration}.pdf"
+
+            if not pdf_path.exists():
+                _err(f"PDF missing: {pdf_path}")
+                break
+
+            pages = _get_page_count(pdf_path)
+            overflow_lines = _get_overflow_lines(pdf_path)
+
+            if pages == 1:
+                content_height = _shared_state.get("last_content_height", 0)
+                if content_height > 0 and content_height < 900:
+                    _warn(
+                        f"Iteration {iteration}: UNDERFLOW (Content height: {content_height}px / ~1122px). Too much empty space."
+                    )
+                    _warn("Discarding this run and restarting completely...")
+                    break  # Break out to trigger next run_attempt
+                final_success = True
+                _ok(
+                    f"Iteration {iteration}: Resume fits perfectly on 1 page! ✅ (Content height: {content_height}px)"
+                )
+                break
+
+            _warn(
+                f"Iteration {iteration}: OVERFLOW ({overflow_lines} rendered lines). Content height: {_shared_state.get('last_content_height', '?')}px"
+            )
+
+            # ── Middle-Man Logic: Objective stripping ──────────────────────
+            if overflow_lines > 3:
+                _info("⚙️ Middle-man: Overflow > 3 lines. Testing objective removal...")
+                try:
+                    data = json.loads(current_json)
+                    if data.get("objective"):
+                        data["objective"] = None
+                        current_json = json.dumps(data, indent=2)
+
+                        # Recompile & recheck
+                        compile_pdf.func(current_json, f"{iteration}_no_obj")
+                        pdf_path = output_dir / f"draft_v{iteration}_no_obj.pdf"
+
+                        pages = _get_page_count(pdf_path)
+                        overflow_lines = _get_overflow_lines(pdf_path)
+
+                        if pages == 1:
+                            final_success = True
+                            _ok(
+                                "⚙️ Middle-man fixed the overflow by removing the objective! ✅"
+                            )
+                            break
+                        else:
+                            _warn(
+                                f"⚙️ Middle-man: Still overflow ({overflow_lines} lines) without objective. Handing to shortener..."
+                            )
+                    else:
+                        _info("⚙️ Middle-man: Objective already removed or empty.")
+                except Exception as e:
+                    _err(f"⚙️ Middle-man JSON error: {e}")
+        else:
+            _warn(
+                f"Reached max iterations ({args.max_iterations}) without fitting on 1 page."
+            )
+
+        if final_success:
+            break
 
     # ── Post-process result ──────────────────────────────────────────────
     _step(4, "Wrapping up…")
 
     # ── Find and copy final PDF ──────────────────────────────────────────
-    pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
-    if pdf_candidates:
-        best_pdf = pdf_candidates[-1]
-        page_count = len(PdfReader(str(best_pdf)).pages)
-
-        if page_count == 1:
-            _ok("Final resume is exactly 1 page! 🎉")
-        else:
-            _warn(f"Best draft is {page_count} page(s).")
-
-        final = output_dir / "final_resume.pdf"
-        shutil.copy2(best_pdf, final)
-        _ok(f"Final resume → {final.resolve()}")
-
-        best_md = best_pdf.with_suffix(".md")
-        if best_md.exists():
-            shutil.copy2(best_md, output_dir / "final_resume.md")
+    if not final_success:
+        _err(
+            f"All {MAX_RUN_ATTEMPTS} attempts produced underflow or failed to fit on 1 page."
+        )
+        _err(
+            "No final resume was produced. Try adjusting the job description or profile data."
+        )
     else:
-        _warn("No PDF drafts found in output folder.")
-        _warn("The crew may not have used the compile_pdf tool.")
+        pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
+        if pdf_candidates:
+            best_pdf = pdf_candidates[-1]
+            page_count = len(PdfReader(str(best_pdf)).pages)
+
+            if page_count == 1:
+                _ok("Final resume is exactly 1 page! 🎉")
+            else:
+                _warn(f"Best draft is {page_count} page(s).")
+
+            final = output_dir / "final_resume.pdf"
+            shutil.copy2(best_pdf, final)
+            _ok(f"Final resume → {final.resolve()}")
+
+            best_md = best_pdf.with_suffix(".md")
+            if best_md.exists():
+                shutil.copy2(best_md, output_dir / "final_resume.md")
+        else:
+            _warn("No PDF drafts found in output folder.")
+            _warn("The crew may not have used the compile_pdf tool.")
 
     print()
     _ok("Done!")

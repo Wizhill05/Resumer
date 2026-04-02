@@ -20,15 +20,16 @@ class TailoredProject(BaseModel):
     """A project selected and tailored for the target job."""
 
     name: str = Field(description="Project name")
-    tech_stack: str = Field(
-        description="Comma-separated technologies, e.g. 'Python, FastAPI, PostgreSQL'"
-    )
     link: str | None = Field(
         default=None,
-        description="The URL for the project, if available in the profile. Always start with https://"
+        description="The URL for the project, if available in the profile. Always start with https://",
     )
-    bullets: list[str] = Field(
-        description="2-3 concise, quantified bullet points tailored to the job"
+    github_path: str | None = Field(
+        default=None,
+        description="The GitHub username and repository name, e.g. 'Wizhill05/LauchYourLLM' extracted from the project link. If not a GitHub link, leave as None.",
+    )
+    description: str = Field(
+        description="A 2-line paragraph mentioning the relevant project tech stack, statistics, and what the project does. Must be detailed enough to fill 2 rendered lines. E.g. 'Built with React and Node.js, maintainer and lead engineer for Docusaurus v2, a static site generator which powers the documentation of many of Meta\\'s Open Source Projects. Used by 7.6k projects on GitHub.'"
     )
 
 
@@ -67,7 +68,7 @@ class TailoredResume(BaseModel):
     )
     objective: str | None = Field(
         default=None,
-        description="1-2 sentence tailored career objective for this specific role",
+        description='1-2 lines PROFESSIONAL SUMMARY explaining why you are a good fit. Example: "Experienced Project Focused Software engineering student seeking full time Front end development"',
     )
     skills: list[SkillCategory] | None = Field(
         default=None,

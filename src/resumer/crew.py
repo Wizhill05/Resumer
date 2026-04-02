@@ -19,17 +19,14 @@ if str(_PROJECT_ROOT) not in sys.path:
 from crewai import Agent, Crew, Process, Task, LLM  # noqa: E402
 from crewai.project import CrewBase, agent, crew, task  # noqa: E402
 
-from schemas.resume_schema import TailoredResume  # noqa: E402
-from src.resumer.tools.pdf_tools import compile_pdf  # noqa: E402
-
 # Force UTF-8 on Windows
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 
 nim_llm = LLM(
-    model="gemini/gemini-3.1-flash-lite-preview",
-    api_key=os.environ.get("GEMINI_KEY"),
+    model="mistral/mistral-large-latest",
+    api_key=os.environ.get("MISTRAL_API_KEY"),
     temperature=0.7,
     max_tokens=40000,
     top_p=0.9,
@@ -52,7 +49,6 @@ class ResumerCrew:
         return Agent(
             config=self.agents_config["resume_writer"],  # type: ignore[index]
             llm=nim_llm,
-            tools=[compile_pdf],
             verbose=True,
         )
 
@@ -61,7 +57,6 @@ class ResumerCrew:
         return Agent(
             config=self.agents_config["resume_shortener"],  # type: ignore[index]
             llm=nim_llm,
-            tools=[compile_pdf],
             verbose=True,
         )
 
@@ -73,7 +68,6 @@ class ResumerCrew:
     def write_resume(self) -> Task:
         return Task(
             config=self.tasks_config["write_resume"],  # type: ignore[index]
-            output_pydantic=TailoredResume,
         )
 
     @task

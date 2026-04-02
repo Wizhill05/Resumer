@@ -1,29 +1,28 @@
 write_resume:
   description: >
     Given the candidate's master profile and a target job description, produce a
-    tailored resume AND compile it to PDF.
+    tailored resume.
 
     Step 1 — Draft the resume content following these rules:
+    - ⚡ TOP PRIORITY — ATS KEYWORD RULE: Extract ALL important keywords, technologies, and phrases from the job description and weave them naturally into the resume — in the Professional Summary, Skills, Project descriptions, and Experience bullets. Even if a keyword is NOT in the candidate's profile (truth.json), you MUST still include it in the Skills section or work it into bullet points naturally. ATS systems scan for exact keyword matches, so missing even one important JD keyword is a failure.
     - The PROFESSIONAL SUMMARY must be 1-2 lines, explaining why you are a good fit for the job and giving a summary. For example: "Experienced Project Focused Software engineering student seeking full time Front end development".
     - Select 2-3 projects most relevant to the job. Prefer 3 projects if 3 or more are related to the job's theme. For each, write a description paragraph that fills exactly 2 rendered lines, mentioning the relevant project tech stack, statistics, and what the project does. For example: "Maintainer and lead engineer for Docusaurus v2 - a React based static site generator which powers the documentation of many of Meta's Open Source Projects — React Native, Jest, Relay, Reason, etc. Used by 7.6k projects on GitHub."
     - Provide the project's GitHub path (e.g. `username/repo`) if available, to be made clickable next to the title.
     - Do not include projects that are not relevant to the job.
-    - STRICT ANTI-HALLUCINATION RULE: Do not invent or hallucinate any projects, experience, or skills! You must ONLY use the exact projects listed in the candidate profile.
+    - ANTI-HALLUCINATION RULE: Do not invent or hallucinate any projects or experience entries! You must ONLY use the exact projects and experience listed in the candidate profile. However, you ARE allowed to add JD keywords to the Skills section even if they are not explicitly listed in the profile.
     - Do not add generic or irrelevant skills based on the job profile.
-    - Group skills into 2-3 categories with 3-5 items each. Be very selective — only include skills that directly appear in or are closely related to the job description. Fewer, highly relevant skills are better than many generic ones.
+    - Group skills into 2-3 categories with 3-5 items each. Be very selective — prioritize skills that directly appear in the job description. Include ALL key technologies mentioned in the JD.
     - DYNAMIC BALANCE RULE: Assess how many relevant projects vs relevant experience the candidate has for the job. If the candidate has more relevant projects than experience, favor projects — include up to 3 projects. If the candidate has strong relevant experience, include 2-3 experience entries and 2 projects. You MUST always include a minimum of 2 experience entries (including the Independent Work entry if needed).
     - INDEPENDENT WORK RULE: If you cannot find enough relevant formal work experience for the job, you are allowed to create a self-titled experience entry such as "AI Developer" at "Independent Projects" with location from the profile and duration "2025 - Present". Use 2-3 bullets that summarize your most relevant independent project work (drawn ONLY from the profile's projects). IMPORTANT: Do NOT repeat or duplicate any data already included in the Projects section — the bullets here must cover different aspects, achievements, or projects than what appears above.
     - For experience entries, include 2-3 bullets each.
     - Do not add any unrelated experience or projects. For example, do not add web dev experience if the job is for AI engineer unless mentioned in the job description.
     - KEYWORD MIRRORING RULE: Throughout the entire resume, use the exact words and phrases from the job description. Do NOT abbreviate or paraphrase them. For example, if the JD says "Natural Language Processing", write "Natural Language Processing" — never "NLP". If the JD says "Machine Learning", do not write "ML". Mirror the JD's terminology exactly.
     - Total content MUST fit on ONE A4 page when rendered. Be ruthlessly concise.
-    - You MUST include the "Extra-Curricular Activities & Leadership" section, grouping
-      achievements from the profile by topics
-      such as 'Leadership' or 'Teamwork'. Do not skip this section.
+    - You MUST include the "EXTRA-CURRICULAR ACTIVITIES & ACHIEVEMENTS" section, grouping
+      achievements and other skills from the profile by topics
+      such as 'Achievements', 'Activities', or 'Public Speaking'. Do not skip this section.
 
-    Step 2 — Once you have the resume JSON, use the "Compile Resume PDF" tool
-    immediately. Pass the full resume JSON as `resume_json` and "{iteration}" as
-    `iteration`. Do NOT skip this step.
+    Step 2 — Output the final customized Resume exactly matching the required JSON schema.
 
     Candidate Profile:
     {profile_json}
@@ -31,9 +30,7 @@ write_resume:
     Target Job Description:
     {job_description}
   expected_output: >
-    A message confirming the PDF was compiled, including the output path and
-    page count. The draft PDF must exist in the output folder before this task
-    completes.
+    The fully drafted TailoredResume JSON object representing the tailored resume.
   agent: resume_writer
 
 shorten_resume:
@@ -41,29 +38,41 @@ shorten_resume:
     The previous resume draft overflows by {overflow_lines} rendered lines.
     Your goal is to help it fit on ONE page. 
 
-    HOWEVER, you must be extremely conservative. You are ONLY allowed to make 
-    EXACTLY ONE logical cut or modification during this turn. Do NOT try to fix 
-    the entire {overflow_lines} overflow in one go.
+    Your mission is to surgically trim AS LITTLE AS POSSIBLE.
+    This system runs in an iterative loop, so conservative trimming is preferred over aggressive trimming.
 
-    Choose EXACTLY ONE of the following actions to perform this turn:
-    1. Shorten a project's description paragraph OR shorten 1 or 2 wordy bullet points from the Experience section. Both sections have equal value—trim from whichever is least relevant to the job.
-    2. OR, completely remove ONE bullet point from the Experience section or significantly cut down the project's description. Priority between the two is equal.
-    3. OR, lightly condense the Extra-Curricular / Activities section.
+    LINE-COST REFERENCE MODEL (estimate only):
+    - Replace one long bullet with a tighter one-line bullet: saves ~0.5 to 1 line.
+    - Remove one experience bullet: saves ~1.5 to 2 lines.
+    - Tighten one project description paragraph: saves ~1 line.
+    - Remove one project entry: saves ~4 to 6 lines.
+    - Remove one entire experience entry: saves ~5 to 7 lines.
+    - Remove one section header + body block: saves 2+ lines (avoid unless absolutely necessary).
 
-    CRITICAL RULE: Under NO circumstances are you allowed to cut the entire Projects section or the entire Experience section. You may ONLY cut or condense specific descriptions or bullet points within them.
+    MINIMAL-CHANGE STRATEGY:
+    1. Estimate a cut plan targeting about {overflow_lines} lines.
+    2. Start with micro-edits only (word-count compression and bullet tightening).
+    3. Remove whole bullets only if still needed after micro-edits.
+    4. Remove whole project/experience entries ONLY when overflow is large and unavoidable.
+    5. If uncertain, under-cut slightly rather than over-cut; the loop will call you again.
 
-    Once you have made your SINGLE chosen edit, STOP. 
-    Maintain all existing formatting and data for everything else. We are using an iterative loop, so we will check the new page count and call you again if more trimming is still needed.
+    STRICT GUARDRAILS:
+    - Prefer preserving Projects and Experience depth.
+    - Never remove more than one full entry (project OR experience) in a single iteration.
+    - Keep at least 2 experience entries whenever possible.
+    - Keep at least 2 projects whenever possible.
+    - Do not touch education/personal info structure.
+    - Do not hallucinate or invent content.
+
+    ACCEPTANCE TARGET:
+    - Aim to remove approximately {overflow_lines} lines with minimal edits.
+    - Do not aggressively over-cut. Over-cutting is worse than slight under-cutting in this loop.
 
     Resume JSON to trim:
     {previous_json}
 
     Target Job Description (for relevance decisions):
     {job_description}
-
-    Once trimmed, use the "Compile Resume PDF" tool with the new JSON and
-    "{iteration}" as the iteration number.
   expected_output: >
-    A confirmation that the trimmed PDF was compiled, including the output path
-    and page count. State exactly how many lines you removed and what you cut.
+    The fully modified TailoredResume JSON object representing the newly shortened resume.
   agent: resume_shortener

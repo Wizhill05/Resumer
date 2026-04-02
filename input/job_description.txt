@@ -1,2 +1,2 @@
-AI Engineer
-We are looking for an AI Engineer with experience in Python, Machine Learning, Deep Learning, and Natural Language Processing. You will design, build, and deploy AI models, collaborate with cross-functional teams, and contribute to cutting-edge AI solutions.
+Back End Developer
+We are looking for an experienced Back End Developer to join our dynamic team. The ideal candidate will be responsible for designing, developing, and maintaining robust server-side applications. You will work closely with front-end developers and product managers to create seamless user experiences. Strong proficiency in Python, Django, and database management is required. Experience with cloud platforms and API development is a plus.

@@ -46,9 +46,9 @@ class TailoredExperience(BaseModel):
 
 
 class ActivityGroup(BaseModel):
-    """A group of extra-curricular activities or leadership roles under a specific topic."""
+    """A group of extra-curricular activities or achievements under a specific topic."""
 
-    topic: str = Field(description="Topic name, e.g. 'Leadership', 'Teamwork'")
+    topic: str = Field(description="Topic name, e.g. 'Achievements', 'Activities', 'Public Speaking'")
     bullets: list[str] = Field(
         description="List of concise bullet points or achievements for this topic"
     )
@@ -86,5 +86,5 @@ class TailoredResume(BaseModel):
     )
     activities: list[ActivityGroup] | None = Field(
         default=None,
-        description="Extra-Curricular Activities & Leadership grouped by topic",
+        description="Extra-Curricular Activities & Achievements grouped by topic",
     )

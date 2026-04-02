@@ -29,6 +29,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure project root is on sys.path for imports
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -49,6 +50,7 @@ import os  # noqa: E402
 
 from pypdf import PdfReader  # noqa: E402
 
+from schemas.resume_schema import TailoredResume  # noqa: E402
 from src.resumer.crew import ResumerCrew  # noqa: E402
 from src.resumer.tools.pdf_tools import set_shared_state  # noqa: E402
 
@@ -102,6 +104,191 @@ def _sanitize_folder_name(name: str) -> str:
     name = name.lower().strip()
     name = re.sub(r"[^a-z0-9]+", "_", name)
     return name.strip("_")
+
+
+def _extract_json_object(raw_text: str) -> str:
+    """Extract the first JSON object from model output text."""
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+
+    first = raw_text.find("{")
+    last = raw_text.rfind("}")
+    if first != -1 and last != -1 and first < last:
+        return raw_text[first : last + 1].strip()
+
+    return raw_text.strip()
+
+
+def _infer_applying_for_from_jd(job_description: str) -> str | None:
+    """Infer a role title from the job description when the model omits it."""
+    lines = [line.strip() for line in job_description.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    first = lines[0]
+    # Prefer a concise title line like "Back End Developer".
+    if len(first.split()) <= 10 and "." not in first:
+        return first
+
+    lowered = job_description.lower()
+    match = re.search(r"looking for (?:an|a)?\s*([^\.,\n]+)", lowered)
+    if match:
+        role = match.group(1).strip(" :.-")
+        if role:
+            return " ".join(word.capitalize() for word in role.split())
+
+    return None
+
+
+def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map common model-output variants into the TailoredResume schema shape."""
+    # Some models wrap the object under a top-level key.
+    if "TailoredResume" in payload and isinstance(payload["TailoredResume"], dict):
+        payload = payload["TailoredResume"]
+
+    # Map alternate naming for applying-for subtitle.
+    if not payload.get("applying_for"):
+        for key in (
+            "applyingFor",
+            "applying_for_role",
+            "applying for",
+            "job_title",
+            "target_role",
+            "position",
+            "role",
+        ):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                payload["applying_for"] = value.strip()
+                break
+
+    # Map alternate naming for objective.
+    if not payload.get("objective"):
+        for key in ("professional_summary", "summary", "objective_summary"):
+            if payload.get(key):
+                payload["objective"] = payload[key]
+                break
+
+    # Normalize skills from dict[str, list[str]] into list[{category, items}].
+    skills_value = payload.get("skills")
+    if isinstance(skills_value, dict):
+        normalized_skills: list[dict[str, Any]] = []
+        for category, items in skills_value.items():
+            if isinstance(items, list):
+                item_list = [str(i).strip() for i in items if str(i).strip()]
+            elif isinstance(items, str):
+                item_list = [s.strip() for s in items.split(",") if s.strip()]
+            else:
+                continue
+            if item_list:
+                normalized_skills.append(
+                    {"category": str(category), "items": item_list}
+                )
+        payload["skills"] = normalized_skills or None
+
+    # Normalize project link variants and ensure dict items.
+    projects_value = payload.get("projects")
+    if isinstance(projects_value, list):
+        normalized_projects: list[dict[str, Any]] = []
+        for project in projects_value:
+            if not isinstance(project, dict):
+                continue
+            p = dict(project)
+            if not p.get("link") and isinstance(p.get("github"), str):
+                p["link"] = p["github"]
+            if not p.get("link") and isinstance(p.get("url"), str):
+                p["link"] = p["url"]
+            link = p.get("link")
+            if (
+                isinstance(link, str)
+                and link
+                and not link.startswith(("http://", "https://"))
+            ):
+                p["link"] = f"https://{link}"
+            normalized_projects.append(p)
+        payload["projects"] = normalized_projects or None
+
+    # Normalize experience bullet variants.
+    experience_value = payload.get("experience")
+    if isinstance(experience_value, list):
+        normalized_experience: list[dict[str, Any]] = []
+        for exp in experience_value:
+            if not isinstance(exp, dict):
+                continue
+            e = dict(exp)
+            bullets = e.get("bullets")
+            if not isinstance(bullets, list) or not bullets:
+                alt = e.get("responsibilities")
+                if isinstance(alt, list):
+                    bullets = [str(b).strip() for b in alt if str(b).strip()]
+                elif isinstance(alt, str) and alt.strip():
+                    bullets = [alt.strip()]
+                else:
+                    bullets = []
+
+            numerical = e.get("numerical data") or e.get("numerical_data")
+            if isinstance(numerical, str) and numerical.strip():
+                bullets.append(numerical.strip())
+            elif isinstance(numerical, list):
+                bullets.extend(str(n).strip() for n in numerical if str(n).strip())
+
+            e["bullets"] = bullets
+            normalized_experience.append(e)
+        payload["experience"] = normalized_experience or None
+
+    # Normalize activities from grouped dicts.
+    activities_value = payload.get("activities")
+    if not activities_value:
+        for alt_key in (
+            "extra_curricular_activities_and_achievements",
+            "extra_curricular_activities_achievements",
+            "extra_curricular",
+        ):
+            if payload.get(alt_key):
+                activities_value = payload[alt_key]
+                break
+
+    if isinstance(activities_value, dict):
+        normalized_activities: list[dict[str, Any]] = []
+        for topic, bullets in activities_value.items():
+            if isinstance(bullets, list):
+                bullet_list = [str(b).strip() for b in bullets if str(b).strip()]
+            elif isinstance(bullets, str):
+                bullet_list = [bullets.strip()] if bullets.strip() else []
+            else:
+                bullet_list = []
+            if bullet_list:
+                normalized_activities.append(
+                    {"topic": str(topic), "bullets": bullet_list}
+                )
+        payload["activities"] = normalized_activities or None
+
+    return payload
+
+
+def _normalize_tailored_resume_json(raw_text: str) -> str:
+    """Normalize and validate model output as TailoredResume JSON."""
+    json_text = _extract_json_object(raw_text)
+    parsed = json.loads(json_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Model output must be a JSON object")
+    parsed = _coerce_tailored_resume_payload(parsed)
+    validated = TailoredResume.model_validate(parsed)
+
+    # Reject effectively-empty outputs so we never render near-blank pages.
+    if not any(
+        [
+            validated.objective,
+            validated.skills,
+            validated.projects,
+            validated.experience,
+            validated.activities,
+        ]
+    ):
+        raise ValueError("Tailored resume payload is empty after normalization")
+
+    return validated.model_dump_json()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -169,9 +356,9 @@ def main() -> None:
             _err(f"File not found: {p}")
             sys.exit(1)
 
-    api_key = os.environ.get("GEMINI_KEY")
+    api_key = os.environ.get("MISTRAL_API_KEY")
     if not api_key:
-        _err("GEMINI_KEY not set. Add it to .env.local or export it.")
+        _err("MISTRAL_API_KEY not set. Add it to .env.local or export it.")
         sys.exit(1)
 
     # ── Load data ────────────────────────────────────────────────────────
@@ -255,7 +442,7 @@ def main() -> None:
                 }
                 result = crew_instance.shortening_crew().kickoff(inputs=inputs)
 
-            # Extract Pydantic structured output or fallback to raw JSON
+            # Extract structured output and validate against the resume schema.
             task_output = (
                 result.tasks_output[-1]
                 if hasattr(result, "tasks_output") and result.tasks_output
@@ -267,15 +454,31 @@ def main() -> None:
                 and task_output.pydantic
             ):
                 current_json = task_output.pydantic.model_dump_json()
-            elif task_output:
-                current_json = getattr(task_output, "raw", "") or ""
             else:
-                _err("Could not extract output from crew agent!")
-                break
+                raw_out = ""
+                if task_output:
+                    raw_out = (getattr(task_output, "raw", "") or "").strip()
+                if not raw_out:
+                    raw_out = (getattr(result, "raw", "") or "").strip()
+                if not raw_out:
+                    raw_out = str(result).strip()
+
+                try:
+                    current_json = _normalize_tailored_resume_json(raw_out)
+                except Exception as e:
+                    _err(f"Could not parse/validate resume JSON from model output: {e}")
+                    preview = raw_out[:300].replace("\n", " ")
+                    if preview:
+                        _warn(f"Model output preview: {preview}")
+                    break
 
             # ── Apply CLI omission flags BEFORE PDF compilation ────────────
             try:
                 temp_data = json.loads(current_json)
+                if not args.no_applying_for and not temp_data.get("applying_for"):
+                    inferred_role = _infer_applying_for_from_jd(jd)
+                    if inferred_role:
+                        temp_data["applying_for"] = inferred_role
                 if args.no_objective:
                     temp_data["objective"] = None
                 if args.no_skills:
@@ -321,36 +524,6 @@ def main() -> None:
                 f"Iteration {iteration}: OVERFLOW ({overflow_lines} rendered lines). Content height: {_shared_state.get('last_content_height', '?')}px"
             )
 
-            # ── Middle-Man Logic: Objective stripping ──────────────────────
-            if overflow_lines > 3:
-                _info("⚙️ Middle-man: Overflow > 3 lines. Testing objective removal...")
-                try:
-                    data = json.loads(current_json)
-                    if data.get("objective"):
-                        data["objective"] = None
-                        current_json = json.dumps(data, indent=2)
-
-                        # Recompile & recheck
-                        compile_pdf.func(current_json, f"{iteration}_no_obj")
-                        pdf_path = output_dir / f"draft_v{iteration}_no_obj.pdf"
-
-                        pages = _get_page_count(pdf_path)
-                        overflow_lines = _get_overflow_lines(pdf_path)
-
-                        if pages == 1:
-                            final_success = True
-                            _ok(
-                                "⚙️ Middle-man fixed the overflow by removing the objective! ✅"
-                            )
-                            break
-                        else:
-                            _warn(
-                                f"⚙️ Middle-man: Still overflow ({overflow_lines} lines) without objective. Handing to shortener..."
-                            )
-                    else:
-                        _info("⚙️ Middle-man: Objective already removed or empty.")
-                except Exception as e:
-                    _err(f"⚙️ Middle-man JSON error: {e}")
         else:
             _warn(
                 f"Reached max iterations ({args.max_iterations}) without fitting on 1 page."

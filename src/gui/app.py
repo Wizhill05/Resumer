@@ -118,8 +118,8 @@ def _inject_figma_css() -> None:
             --bg: #0b0c10;
             --panel: #111317;
             --panel-2: #06080d;
-            --line: #3b3f45;
-            --line-soft: #2a2d31;
+            --line: #2e3138;
+            --line-soft: #1e2127;
             --text: #f2f3f5;
             --muted: #a3a8b3;
             --green: #24cc5a;
@@ -127,157 +127,134 @@ def _inject_figma_css() -> None:
             --red: #e35a67;
         }
 
+        /* ─── Global ─── */
         .stApp {
             font-family: 'Manrope', sans-serif;
             color: var(--text);
             background:
-                radial-gradient(900px 620px at 15% -8%, rgba(36, 204, 90, 0.08), transparent 60%),
-                radial-gradient(900px 620px at 110% 0%, rgba(255, 255, 255, 0.03), transparent 55%),
+                radial-gradient(900px 620px at 15% -8%, rgba(36, 204, 90, 0.06), transparent 60%),
+                radial-gradient(900px 620px at 110% 0%, rgba(255, 255, 255, 0.02), transparent 55%),
                 var(--bg);
         }
 
         [data-testid="stHeader"],
         [data-testid="stToolbar"],
         [data-testid="stSidebar"] {
-            display: none;
+            display: none !important;
         }
 
         .block-container {
-            padding-top: 1.1rem;
-            padding-bottom: 1rem;
-            max-width: 1600px;
+            padding-top: 0.7rem !important;
+            padding-bottom: 0.5rem !important;
+            max-width: 1640px !important;
         }
 
-        .fig-card {
-            background: linear-gradient(180deg, rgba(18, 21, 27, 0.98), rgba(10, 12, 16, 0.98));
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 1.15rem 1.25rem 1.1rem;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+        [data-testid="stHorizontalBlock"] {
+            gap: 0.85rem !important;
         }
 
-        .fig-card + .fig-card {
-            margin-top: 1rem;
+        /* ─── st.container(border=True) card styling ─── */
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: linear-gradient(180deg, rgba(16, 18, 24, 0.98), rgba(10, 12, 16, 0.98)) !important;
+            border: 1px solid var(--line) !important;
+            border-radius: 14px !important;
+            box-shadow:
+                inset 0 1px 0 0 rgba(255,255,255,0.03),
+                0 2px 12px rgba(0,0,0,0.25) !important;
         }
 
-        .fig-card-header {
+        [data-testid="stVerticalBlockBorderWrapper"] > div {
+            padding: 1.1rem 1.25rem 0.9rem !important;
+        }
+
+        /* ─── Card Headers (raw HTML) ─── */
+        .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             gap: 0.8rem;
-            margin-bottom: 0.7rem;
+            margin-bottom: 0.35rem;
         }
 
-        .fig-title {
-            font-size: 2.55rem;
+        .card-title {
+            font-size: 1.85rem;
             font-weight: 800;
             letter-spacing: -0.02em;
             color: #f1f2f5;
             line-height: 1;
-        }
-
-        .fig-card-title {
-            font-size: 2.2rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-            color: #f1f2f5;
-            line-height: 1;
-        }
-
-        .fig-right-meta {
-            text-align: right;
-            font-size: 0.96rem;
-            color: #d9dde5;
-            font-weight: 700;
             white-space: nowrap;
         }
 
-        .fig-label {
-            font-size: 1.02rem;
+        .card-header-right {
+            text-align: right;
+            font-size: 0.93rem;
+            color: #d9dde5;
             font-weight: 700;
-            color: #e8eaf0;
-            margin-bottom: 0.1rem;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
         }
 
-        .fig-small-label {
+        .meta-label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #e0e2e8;
+        }
+
+        .meta-sub {
+            font-size: 0.78rem;
             color: var(--muted);
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            font-size: 0.67rem;
-            margin-bottom: 0.2rem;
         }
 
+        /* ─── Signal Bars ─── */
         .signal {
             display: inline-flex;
-            gap: 6px;
+            gap: 5px;
             align-items: center;
-            margin-left: 0.55rem;
+            margin-left: 0.45rem;
         }
 
         .signal span {
             display: inline-block;
-            width: 34px;
+            width: 30px;
             height: 7px;
             border-radius: 999px;
-            background: #4a4a4a;
+            background: #3a3d44;
         }
 
-        .signal .on { background: var(--green); }
+        .signal .on  { background: var(--green); }
         .signal .warn { background: var(--yellow); }
-        .signal .bad { background: var(--red); }
+        .signal .bad  { background: var(--red); }
 
+        /* ─── Resume Preview ─── */
         .preview-shell {
-            border: 1px solid var(--line-soft);
-            border-radius: 7px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
             overflow: hidden;
             background: #f7f7f8;
-            min-height: 760px;
+            min-height: 780px;
         }
 
         .preview-caption {
-            margin-top: 0.55rem;
+            margin-top: 0.45rem;
             color: var(--muted);
-            font-size: 0.8rem;
+            font-size: 0.78rem;
         }
 
+        .preview-caption a {
+            color: var(--green);
+            text-decoration: none;
+        }
+        .preview-caption a:hover {
+            text-decoration: underline;
+        }
+
+        /* ─── Controls ─── */
         .controls-note {
             color: var(--muted);
-            font-size: 0.83rem;
-            margin-bottom: 0.4rem;
-        }
-
-        .stTextInput > label,
-        .stSelectbox > label,
-        .stSlider > label,
-        .stCheckbox > label,
-        .stMarkdown p {
-            font-family: 'Manrope', sans-serif;
-        }
-
-        .stTextInput input,
-        .stSelectbox [data-baseweb="select"] div,
-        .stSlider [data-baseweb="slider"] {
-            background: #181b21;
-            border-color: #2e3238;
-            color: #f1f2f5;
-        }
-
-        .stButton > button,
-        .stDownloadButton > button,
-        .stFormSubmitButton > button {
-            border-radius: 8px;
-            border: 1px solid #2f343a;
-            background: #1a1e25;
-            color: #f2f4f7;
-            font-weight: 700;
-            height: 2.55rem;
-        }
-
-        .stButton > button:hover,
-        .stDownloadButton > button:hover,
-        .stFormSubmitButton > button:hover {
-            border-color: #4e545d;
-            background: #232934;
+            font-size: 0.82rem;
+            margin-bottom: 0.3rem;
         }
 
         .mono-note {
@@ -286,42 +263,72 @@ def _inject_figma_css() -> None:
             color: var(--muted);
         }
 
-        .run-state-grid {
-            margin-top: 0.6rem;
-            border: 1px solid var(--line-soft);
-            border-radius: 8px;
-            overflow: hidden;
+        /* ─── Streamlit widget overrides ─── */
+        .stTextInput > label,
+        .stSelectbox > label,
+        .stSlider > label,
+        .stCheckbox > label {
+            font-family: 'Manrope', sans-serif !important;
+            font-size: 0.88rem !important;
+            font-weight: 600 !important;
+            color: #c0c5ce !important;
         }
 
-        .run-state-row {
-            display: grid;
-            grid-template-columns: 130px 1fr;
-            gap: 0;
+        .stTextInput input {
+            background: #13161c !important;
+            border-color: #2a2e36 !important;
+            color: #f1f2f5 !important;
+            border-radius: 8px !important;
         }
 
-        .run-state-row:not(:last-child) {
-            border-bottom: 1px solid var(--line-soft);
+        .stSelectbox [data-baseweb="select"] > div {
+            background: #13161c !important;
+            border-color: #2a2e36 !important;
+            color: #f1f2f5 !important;
+            border-radius: 8px !important;
         }
 
-        .run-state-k,
-        .run-state-v {
-            padding: 0.48rem 0.6rem;
-            font-size: 0.82rem;
+        .stSlider [data-baseweb="slider"] {
+            background: transparent !important;
         }
 
-        .run-state-k {
-            color: var(--muted);
-            background: rgba(255, 255, 255, 0.01);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
+        .stButton > button,
+        .stDownloadButton > button,
+        .stFormSubmitButton > button {
+            border-radius: 10px !important;
+            border: 1px solid #2f343a !important;
+            background: #181c24 !important;
+            color: #f2f4f7 !important;
+            font-weight: 700 !important;
+            height: 2.55rem;
+            transition: all 0.2s ease !important;
         }
 
-        .run-state-v {
-            font-family: 'JetBrains Mono', monospace;
-            color: #ebedf2;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        .stFormSubmitButton > button:hover {
+            border-color: #4e545d !important;
+            background: #232934 !important;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+        }
+
+        /* For the iframe in the logs panel — remove Streamlit's padding */
+        iframe {
+            border-radius: 8px !important;
+        }
+
+        /* ─── Expander styling ─── */
+        details summary {
+            font-family: 'Manrope', sans-serif !important;
+            font-weight: 600 !important;
+            color: var(--muted) !important;
+        }
+
+        /* Remove extra top-margin from the form inside controls card */
+        [data-testid="stForm"] {
+            border: none !important;
+            padding: 0 !important;
         }
         </style>
         """,
@@ -412,7 +419,7 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
                 [
                     f"<div class='log-row log-{html.escape(entry.level)}{section_class}'>",
                     f"<span class='log-time'>{html.escape(ts)}</span>",
-                    f"<span class='log-stream'>{html.escape(entry.stream.upper())}</span>",
+                    f"<span class='log-stream'>>>> {html.escape(entry.stream.upper())}</span>",
                     f"<pre class='log-msg'>{msg}</pre>",
                     "</div>",
                 ]
@@ -426,41 +433,69 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
     :root {{
-      --line-soft: #20242a;
+      --line-soft: #1a1d23;
       --text: #d8dde6;
-      --muted: #8f96a3;
+      --muted: #6b7280;
       --event: #82b4ff;
       --warn: #f6bd3f;
       --bad: #e35a67;
       --good: #28cc67;
+      --prompt-green: #3ddc84;
     }}
-    body {{ margin: 0; background: transparent; font-family: 'JetBrains Mono', monospace; }}
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: #05070c;
+      font-family: 'JetBrains Mono', monospace;
+    }}
     .log-shell {{
       background: #05070c;
-      border: 1px solid var(--line-soft);
-      border-radius: 8px;
-      padding: 0.45rem 0.5rem;
-      height: 470px;
+      padding: 0.55rem 0.65rem;
+      height: 100vh;
       overflow-y: auto;
       box-sizing: border-box;
     }}
+    .log-shell::-webkit-scrollbar {{
+      width: 6px;
+    }}
+    .log-shell::-webkit-scrollbar-track {{
+      background: transparent;
+    }}
+    .log-shell::-webkit-scrollbar-thumb {{
+      background: #2a2d33;
+      border-radius: 10px;
+    }}
     .log-row {{
       display: grid;
-      grid-template-columns: 80px 76px 1fr;
-      gap: 9px;
+      grid-template-columns: 76px 100px 1fr;
+      gap: 8px;
       align-items: start;
-      font-size: 0.77rem;
-      line-height: 1.3;
-      padding: 0.17rem 0.22rem;
-      border-radius: 6px;
-      margin-bottom: 2px;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      padding: 0.18rem 0.25rem;
+      border-radius: 4px;
+      margin-bottom: 1px;
       color: var(--text);
     }}
-    .log-row:hover {{ background: rgba(130, 180, 255, 0.06); }}
-    .log-time {{ color: var(--muted); }}
-    .log-stream {{ color: #67da93; font-weight: 700; letter-spacing: 0.03em; }}
-    .log-msg {{ margin: 0; white-space: pre-wrap; word-break: break-word; tab-size: 4; }}
+    .log-row:hover {{
+      background: rgba(130, 180, 255, 0.05);
+    }}
+    .log-time {{
+      color: var(--muted);
+    }}
+    .log-stream {{
+      color: var(--prompt-green);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }}
+    .log-msg {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 4;
+    }}
     .log-section .log-msg {{ font-weight: 700; }}
     .log-info .log-msg {{ color: var(--text); }}
     .log-event .log-msg {{ color: var(--event); }}
@@ -480,248 +515,272 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
 """
 
 
+# ────────────────────────────────────────────────
+# Panel renderers
+# ────────────────────────────────────────────────
+
+
 def _render_resume_panel(controller: ResumeRunController) -> None:
+    """Left column: Resumer title + resume name selector + PDF preview."""
 
     folders = _list_output_folders()
-    if not folders:
-        st.markdown(
-            "<div class='fig-card-header'><div class='fig-title'>Resumer</div><div class='fig-right-meta'>Resume Name</div></div>",
-            unsafe_allow_html=True,
-        )
-        st.info("No artifacts yet. Launch a run to generate resume previews.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
 
-    folder_labels = [folder.name for folder in folders]
-    active_folder_name = ""
-    if controller.status.output_dir not in {"", "-"}:
-        active_folder_name = Path(controller.status.output_dir).name
-
-    folder_index = (
-        folder_labels.index(active_folder_name)
-        if active_folder_name in folder_labels
-        else 0
-    )
-    selected_folder = st.selectbox(
-        "Run Folder",
-        options=folder_labels,
-        index=folder_index,
-        key="resume_folder_selector",
-    )
-
-    selected_folder_path = OUTPUTS_ROOT / selected_folder
-    artifacts = _list_folder_artifacts(selected_folder_path)
-
-    if not artifacts:
-        st.warning("This run folder has no previewable artifacts.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    artifact_names = [item.name for item in artifacts]
-    default_artifact = _default_artifact_name(artifacts)
-    default_index = artifact_names.index(default_artifact)
-
-    head_left, head_right = st.columns([1.2, 1])
-    with head_left:
-        st.markdown("<div class='fig-title'>Resumer</div>", unsafe_allow_html=True)
-    with head_right:
-        st.markdown("<div class='fig-label'>Resume Name</div>", unsafe_allow_html=True)
-        selected_artifact_name = st.selectbox(
-            "Resume Name",
-            options=artifact_names,
-            index=default_index,
-            key=f"resume_artifact_{selected_folder}",
-            label_visibility="collapsed",
-        )
-
-    selected_artifact_path = next(
-        (item for item in artifacts if item.name == selected_artifact_name),
-        artifacts[0],
-    )
-
-    with selected_artifact_path.open("rb") as file:
-        payload = file.read()
-
-    if selected_artifact_path.suffix.lower() == ".pdf":
-        pdf_url = _local_file_url(selected_artifact_path)
-        if pdf_url:
-            safe_url = html.escape(pdf_url)
+    with st.container(border=True):
+        if not folders:
             st.markdown(
-                f"""
-                <div class='preview-shell'>
-                    <object data='{safe_url}' type='application/pdf' width='100%' height='760'>
-                        <embed src='{safe_url}' type='application/pdf' width='100%' height='760' />
-                        <iframe src='{safe_url}' width='100%' height='760' style='border:none;'></iframe>
-                    </object>
-                </div>
-                """,
+                "<div class='card-header'>"
+                "<div class='card-title'>Resumer</div>"
+                "<div class='card-header-right'><span class='meta-label'>Resume Name</span></div>"
+                "</div>",
                 unsafe_allow_html=True,
             )
+            st.info("No artifacts yet. Launch a run to generate resume previews.")
+            return
+
+        folder_labels = [folder.name for folder in folders]
+        active_folder_name = ""
+        if controller.status.output_dir not in {"", "-"}:
+            active_folder_name = Path(controller.status.output_dir).name
+
+        folder_index = (
+            folder_labels.index(active_folder_name)
+            if active_folder_name in folder_labels
+            else 0
+        )
+
+        selected_folder_path = OUTPUTS_ROOT / folder_labels[folder_index]
+        artifacts = _list_folder_artifacts(selected_folder_path)
+
+        if not artifacts:
             st.markdown(
-                f"<div class='preview-caption'>Open directly: <a href='{safe_url}' target='_blank'>new tab</a></div>",
+                "<div class='card-header'><div class='card-title'>Resumer</div></div>",
                 unsafe_allow_html=True,
             )
+            st.warning("This run folder has no previewable artifacts.")
+            return
+
+        artifact_names = [item.name for item in artifacts]
+        default_artifact = _default_artifact_name(artifacts)
+        default_index = artifact_names.index(default_artifact)
+
+        # Title
+        st.markdown("<div class='card-title'>Resumer</div>", unsafe_allow_html=True)
+
+        # Run folder and artifact file selectors side by side
+        sel_left, sel_right = st.columns(2)
+        with sel_left:
+            selected_folder = st.selectbox(
+                "Run Folder",
+                options=folder_labels,
+                index=folder_index,
+                key="resume_folder_selector",
+            )
+        with sel_right:
+            selected_artifact_name = st.selectbox(
+                "Resume File",
+                options=artifact_names,
+                index=default_index,
+                key=f"resume_artifact_{folder_labels[folder_index]}",
+            )
+
+        # Re-resolve after user might change folder
+        selected_folder_path = OUTPUTS_ROOT / selected_folder
+        artifacts = _list_folder_artifacts(selected_folder_path)
+        if not artifacts:
+            st.warning("No previewable artifacts in this folder.")
+            return
+
+        artifact_names_refreshed = [item.name for item in artifacts]
+        if selected_artifact_name not in artifact_names_refreshed:
+            selected_artifact_name = _default_artifact_name(artifacts)
+
+        selected_artifact_path = next(
+            (item for item in artifacts if item.name == selected_artifact_name),
+            artifacts[0],
+        )
+
+        with selected_artifact_path.open("rb") as file:
+            payload = file.read()
+
+        if selected_artifact_path.suffix.lower() == ".pdf":
+            pdf_url = _local_file_url(selected_artifact_path)
+            if pdf_url:
+                safe_url = html.escape(pdf_url)
+                st.markdown(
+                    f"""
+                    <div class='preview-shell'>
+                        <object data='{safe_url}' type='application/pdf' width='100%' height='800'>
+                            <embed src='{safe_url}' type='application/pdf' width='100%' height='800' />
+                            <iframe src='{safe_url}' width='100%' height='800' style='border:none;'></iframe>
+                        </object>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"<div class='preview-caption'>Open directly: <a href='{safe_url}' target='_blank'>new tab ↗</a></div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.warning("Preview server unavailable. Use download to open the file.")
         else:
-            st.warning("Preview server unavailable. Use download to open the file.")
-    else:
-        text = payload.decode("utf-8", errors="replace")
-        st.code(text, language="markdown")
+            text = payload.decode("utf-8", errors="replace")
+            st.code(text, language="markdown")
 
-    st.download_button(
-        "Download selected artifact",
-        data=payload,
-        file_name=selected_artifact_path.name,
-        mime="application/pdf"
-        if selected_artifact_path.suffix.lower() == ".pdf"
-        else "text/markdown",
-        use_container_width=True,
-        key=f"download_{selected_folder}_{selected_artifact_path.name}",
-    )
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.download_button(
+            "⬇  Download",
+            data=payload,
+            file_name=selected_artifact_path.name,
+            mime="application/pdf"
+            if selected_artifact_path.suffix.lower() == ".pdf"
+            else "text/markdown",
+            use_container_width=True,
+            key=f"download_{selected_folder}_{selected_artifact_path.name}",
+        )
 
 
 def _render_logs_panel(controller: ResumeRunController) -> None:
+    """Top-right: Logs panel with terminal-style log viewer."""
     status = controller.status
     agent = status.active_agent if status.active_agent not in {"", "-"} else "Idle"
     signal = _signal_markup(status.state)
 
-    st.markdown(
-        (
-            "<div class='fig-card-header'>"
-            "<div class='fig-card-title'>Logs</div>"
-            f"<div class='fig-right-meta'>Current Agent - {html.escape(agent)}"
-            f" <span class='signal'>{signal}</span></div>"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<div class='card-header'>"
+                "<div class='card-title'>Logs</div>"
+                f"<div class='card-header-right'>Current Agent - {html.escape(agent)}"
+                f" <span class='signal'>{signal}</span></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
-    gui_tmp_dir = WORKSPACE_ROOT / ".resumer_gui"
-    gui_tmp_dir.mkdir(parents=True, exist_ok=True)
-    log_view_path = gui_tmp_dir / "log_console.html"
-    log_view_path.write_text(_build_logs_html(controller.logs), encoding="utf-8")
+        gui_tmp_dir = WORKSPACE_ROOT / ".resumer_gui"
+        gui_tmp_dir.mkdir(parents=True, exist_ok=True)
+        log_view_path = gui_tmp_dir / "log_console.html"
+        log_view_path.write_text(_build_logs_html(controller.logs), encoding="utf-8")
 
-    log_url = _local_file_url(log_view_path)
-    if log_url:
-        st.iframe(f"{log_url}?t={int(time.time() * 1000)}", height=490)
-    else:
-        st.warning("Could not render logs panel. Local preview server unavailable.")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        log_url = _local_file_url(log_view_path)
+        if log_url:
+            st.iframe(f"{log_url}?t={int(time.time() * 1000)}", height=480)
+        else:
+            st.warning("Could not render logs panel. Local preview server unavailable.")
 
 
 def _render_controls_panel(controller: ResumeRunController) -> None:
-    st.markdown(
-        "<div class='fig-card-header'><div class='fig-card-title'>Run Controls</div></div>",
-        unsafe_allow_html=True,
-    )
+    """Bottom-right: Run Controls panel."""
 
     if "run_name_input" not in st.session_state:
         st.session_state.run_name_input = (
             f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )
 
-    top_left, top_right = st.columns([1.7, 1])
-    with top_left:
-        st.markdown(
-            "<div class='controls-note'>Configure inputs and model for a new run.</div>",
-            unsafe_allow_html=True,
-        )
-    with top_right:
-        st.text_input(
-            "Run Name Input Field", key="run_name_input", label_visibility="visible"
-        )
-
     preset_names = list(MODEL_PRESETS.keys())
 
-    with st.form("pipeline_controls_form"):
-        left, right = st.columns([1.55, 1])
-        with left:
-            jd_path = st.text_input(
-                "Job Description File Path", value="input/job_description.txt"
-            )
-            data_path = st.text_input("Master Profile Path", value="input/truth.json")
-            preset = st.selectbox("Model Selection", options=preset_names, index=0)
-        with right:
-            max_iterations = st.slider(
-                "No of Iterations", min_value=1, max_value=20, value=10
-            )
-            st.markdown(
-                f"<div class='mono-note'>Status: {_status_badge(controller.status.state)}</div>",
-                unsafe_allow_html=True,
-            )
-
-        preset_model, preset_key_env = MODEL_PRESETS[preset]
-        custom_model = ""
-        custom_key_env = ""
-        if preset == "Custom":
-            custom_model = st.text_input(
-                "Custom Model ID", value="mistral/mistral-large-latest"
-            )
-            custom_key_env = st.text_input(
-                "API Key Env Variable", value="MISTRAL_API_KEY"
-            )
-
-        final_model = custom_model.strip() if preset == "Custom" else preset_model
-        final_key_env = custom_key_env.strip() if preset == "Custom" else preset_key_env
-
-        with st.expander("Optional Section Visibility", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                no_objective = st.checkbox("Hide objective")
-                no_skills = st.checkbox("Hide skills")
-                no_experience = st.checkbox("Hide experience")
-                no_applying_for = st.checkbox("Hide applying-for subtitle")
-            with c2:
-                no_education = st.checkbox("Hide education")
-                no_projects = st.checkbox("Hide projects")
-                no_activities = st.checkbox("Hide activities")
-                no_photo = st.checkbox("Hide photo")
-
-        btn_left, btn_right = st.columns(2)
-        start_run = btn_left.form_submit_button(
-            "Run Pipeline",
-            disabled=controller.is_running(),
-            use_container_width=True,
-        )
-        stop_run = btn_right.form_submit_button(
-            "Stop Active Run",
-            disabled=not controller.is_running(),
-            use_container_width=True,
+    with st.container(border=True):
+        st.markdown(
+            "<div class='card-title' style='margin-bottom:0.75rem;'>Run Controls</div>",
+            unsafe_allow_html=True,
         )
 
-    if stop_run:
-        controller.stop_run()
-        st.rerun()
+        with st.form("pipeline_controls_form"):
+            left, right = st.columns([1.55, 1])
 
-    if start_run:
-        omissions = {
-            "no_objective": no_objective,
-            "no_education": no_education,
-            "no_skills": no_skills,
-            "no_projects": no_projects,
-            "no_experience": no_experience,
-            "no_activities": no_activities,
-            "no_applying_for": no_applying_for,
-            "no_photo": no_photo,
-        }
+            with left:
+                # All text / select inputs stacked cleanly
+                st.text_input(
+                    "Run Name",
+                    key="run_name_input",
+                )
+                jd_path = st.text_input(
+                    "Job Description File Path", value="input/job_description.txt"
+                )
+                data_path = st.text_input(
+                    "Master Profile Path", value="input/truth.json"
+                )
+                preset = st.selectbox("Model Selection", options=preset_names, index=0)
 
-        try:
-            controller.start_run(
-                jd_path=jd_path.strip(),
-                data_path=data_path.strip(),
-                max_iterations=max_iterations,
-                job_label=st.session_state.run_name_input.strip() or "run_manual",
-                model=final_model,
-                api_key_env=final_key_env,
-                omissions=omissions,
+            with right:
+                max_iterations = st.slider(
+                    "No of Iterations", min_value=1, max_value=20, value=10
+                )
+                st.markdown(
+                    f"<div class='mono-note' style='margin-top:0.35rem; margin-bottom:0.9rem;'>"
+                    f"Status: {_status_badge(controller.status.state)}</div>",
+                    unsafe_allow_html=True,
+                )
+                # Buttons in the right column, stacked
+                start_run = st.form_submit_button(
+                    "▶  Run Pipeline",
+                    disabled=controller.is_running(),
+                    use_container_width=True,
+                )
+                stop_run = st.form_submit_button(
+                    "⏹  Stop",
+                    disabled=not controller.is_running(),
+                    use_container_width=True,
+                )
+
+            preset_model, preset_key_env = MODEL_PRESETS[preset]
+            custom_model = ""
+            custom_key_env = ""
+            if preset == "Custom":
+                custom_model = st.text_input(
+                    "Custom Model ID", value="mistral/mistral-large-latest"
+                )
+                custom_key_env = st.text_input(
+                    "API Key Env Variable", value="MISTRAL_API_KEY"
+                )
+
+            final_model = custom_model.strip() if preset == "Custom" else preset_model
+            final_key_env = (
+                custom_key_env.strip() if preset == "Custom" else preset_key_env
             )
+
+            with st.expander("Optional Section Visibility", expanded=False):
+                c1, c2 = st.columns(2)
+                with c1:
+                    no_objective = st.checkbox("Hide objective")
+                    no_skills = st.checkbox("Hide skills")
+                    no_experience = st.checkbox("Hide experience")
+                    no_applying_for = st.checkbox("Hide applying-for subtitle")
+                with c2:
+                    no_education = st.checkbox("Hide education")
+                    no_projects = st.checkbox("Hide projects")
+                    no_activities = st.checkbox("Hide activities")
+                    no_photo = st.checkbox("Hide photo")
+
+        if stop_run:
+            controller.stop_run()
             st.rerun()
-        except Exception as exc:
-            st.error(f"Could not start run: {exc}")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        if start_run:
+            omissions = {
+                "no_objective": no_objective,
+                "no_education": no_education,
+                "no_skills": no_skills,
+                "no_projects": no_projects,
+                "no_experience": no_experience,
+                "no_activities": no_activities,
+                "no_applying_for": no_applying_for,
+                "no_photo": no_photo,
+            }
+
+            try:
+                controller.start_run(
+                    jd_path=jd_path.strip(),
+                    data_path=data_path.strip(),
+                    max_iterations=max_iterations,
+                    job_label=st.session_state.run_name_input.strip() or "run_manual",
+                    model=final_model,
+                    api_key_env=final_key_env,
+                    omissions=omissions,
+                )
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not start run: {exc}")
 
 
 def main() -> None:
@@ -736,7 +795,7 @@ def main() -> None:
     controller = _ensure_controller()
     controller.poll()
 
-    left_col, right_col = st.columns([1.03, 1.47], gap="medium")
+    left_col, right_col = st.columns([1.5, 1.5], gap="medium")
 
     with left_col:
         _render_resume_panel(controller)

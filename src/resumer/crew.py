@@ -19,6 +19,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 from crewai import Agent, Crew, Process, Task, LLM  # noqa: E402
 from crewai.project import CrewBase, agent, crew, task  # noqa: E402
 
+from schemas.resume_schema import ResearchedJob, TailoredResume
+from src.resumer.tools.pdf_tools import check_page_count
+
 # Force UTF-8 on Windows
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -91,6 +94,14 @@ class ResumerCrew:
             verbose=True,
         )
 
+    @agent
+    def job_researcher(self) -> Agent:
+        return Agent(
+            config=self.agents_config["job_researcher"],  # type: ignore[index]
+            llm=nim_llm,
+            verbose=True,
+        )
+
     # ------------------------------------------------------------------
     # Tasks
     # ------------------------------------------------------------------
@@ -105,6 +116,13 @@ class ResumerCrew:
     def shorten_resume(self) -> Task:
         return Task(
             config=self.tasks_config["shorten_resume"],  # type: ignore[index]
+        )
+
+    @task
+    def research_job(self) -> Task:
+        return Task(
+            config=self.tasks_config["research_job"],  # type: ignore[index]
+            output_pydantic=ResearchedJob,
         )
 
     # ------------------------------------------------------------------
@@ -128,6 +146,16 @@ class ResumerCrew:
         return Crew(
             agents=[self.resume_shortener()],
             tasks=[shorten],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+    def research_crew(self) -> Crew:
+        """Pre-pipeline: scrape URL, extract full JD + run title."""
+        research = self.research_job()
+        return Crew(
+            agents=[self.job_researcher()],
+            tasks=[research],
             process=Process.sequential,
             verbose=True,
         )

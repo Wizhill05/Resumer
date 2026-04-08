@@ -548,20 +548,6 @@ def _render_resume_panel(controller: ResumeRunController) -> None:
             else 0
         )
 
-        selected_folder_path = OUTPUTS_ROOT / folder_labels[folder_index]
-        artifacts = _list_folder_artifacts(selected_folder_path)
-
-        if not artifacts:
-            st.markdown(
-                "<div class='card-header'><div class='card-title'>Resumer</div></div>",
-                unsafe_allow_html=True,
-            )
-            st.warning("This run folder has no previewable artifacts.")
-            return
-
-        artifact_names = [item.name for item in artifacts]
-        default_artifact = _default_artifact_name(artifacts)
-        default_index = artifact_names.index(default_artifact)
 
         # Title
         st.markdown("<div class='card-title'>Resumer</div>", unsafe_allow_html=True)
@@ -575,24 +561,28 @@ def _render_resume_panel(controller: ResumeRunController) -> None:
                 index=folder_index,
                 key="resume_folder_selector",
             )
+
+        # Resolve artifacts from the *selected* folder before rendering file picker
+        selected_folder_path = OUTPUTS_ROOT / selected_folder
+        artifacts = _list_folder_artifacts(selected_folder_path)
+        if not artifacts:
+            with sel_right:
+                st.warning("No files in this folder.")
+            return
+
+        artifact_names = [item.name for item in artifacts]
+        default_artifact = _default_artifact_name(artifacts)
+        default_index = artifact_names.index(default_artifact)
+
         with sel_right:
             selected_artifact_name = st.selectbox(
                 "Resume File",
                 options=artifact_names,
                 index=default_index,
-                key=f"resume_artifact_{folder_labels[folder_index]}",
+                # Key tied to selected folder so Streamlit refreshes the widget
+                # with fresh options whenever the folder changes.
+                key=f"resume_artifact_{selected_folder}",
             )
-
-        # Re-resolve after user might change folder
-        selected_folder_path = OUTPUTS_ROOT / selected_folder
-        artifacts = _list_folder_artifacts(selected_folder_path)
-        if not artifacts:
-            st.warning("No previewable artifacts in this folder.")
-            return
-
-        artifact_names_refreshed = [item.name for item in artifacts]
-        if selected_artifact_name not in artifact_names_refreshed:
-            selected_artifact_name = _default_artifact_name(artifacts)
 
         selected_artifact_path = next(
             (item for item in artifacts if item.name == selected_artifact_name),
@@ -685,6 +675,14 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
             unsafe_allow_html=True,
         )
 
+        # ── Job source toggle (Outside form for instant reactivity) ──
+        jd_mode = st.radio(
+            "Job Source",
+            options=["📝 Text Mode", "🔗 URL Mode"],
+            horizontal=True,
+            key="jd_mode_radio",
+        )
+
         with st.form("pipeline_controls_form"):
             left, right = st.columns([1.55, 1])
 
@@ -694,9 +692,23 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                     "Run Name",
                     key="run_name_input",
                 )
-                jd_path = st.text_input(
-                    "Job Description File Path", value="input/job_description.txt"
-                )
+
+                if jd_mode == "🔗 URL Mode":
+                    job_url = st.text_input(
+                        "Job Posting URL",
+                        placeholder="https://www.linkedin.com/jobs/view/... or any job board URL",
+                        key="job_url_input",
+                    )
+                    jd_text = ""
+                else:
+                    jd_text = st.text_area(
+                        "Job Description",
+                        placeholder="Paste the full job description here...",
+                        height=200,
+                        key="jd_text_input",
+                    )
+                    job_url = ""
+
                 data_path = st.text_input(
                     "Master Profile Path", value="input/truth.json"
                 )
@@ -769,14 +781,23 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
             }
 
             try:
+                # In URL mode, let main.py derive the job label from the researcher output
+                # unless the user has typed a custom run name.
+                run_name = st.session_state.run_name_input.strip()
+                # If in URL mode and run name still looks like the auto-generated default,
+                # pass empty string so main.py can auto-fill from the researcher's output.
+                is_default_name = run_name.startswith("run_")
+                effective_label = "" if (job_url.strip() and is_default_name) else run_name or "run_manual"
+
                 controller.start_run(
-                    jd_path=jd_path.strip(),
+                    jd_text=jd_text.strip(),
                     data_path=data_path.strip(),
                     max_iterations=max_iterations,
-                    job_label=st.session_state.run_name_input.strip() or "run_manual",
+                    job_label=effective_label,
                     model=final_model,
                     api_key_env=final_key_env,
                     omissions=omissions,
+                    url=job_url.strip(),
                 )
                 st.rerun()
             except Exception as exc:

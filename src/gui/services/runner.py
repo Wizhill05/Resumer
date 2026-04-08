@@ -94,13 +94,14 @@ class ResumeRunController:
     def start_run(
         self,
         *,
-        jd_path: str,
+        jd_text: str,
         data_path: str,
         max_iterations: int,
         job_label: str,
         model: str,
         api_key_env: str,
         omissions: dict[str, bool],
+        url: str = "",
     ) -> None:
         if self.is_running():
             raise RuntimeError("A run is already in progress")
@@ -119,8 +120,6 @@ class ResumeRunController:
             "run",
             "python",
             "src/resumer/main.py",
-            "--jd",
-            jd_path,
             "--data",
             data_path,
             "--max-iterations",
@@ -132,6 +131,12 @@ class ResumeRunController:
             "--api-key-env",
             api_key_env,
         ]
+
+        # Either pass a URL to scrape or the raw JD text.
+        if url.strip():
+            cmd += ["--url", url.strip()]
+        else:
+            cmd += ["--jd-text", jd_text]
 
         flag_map = {
             "no_objective": "--no-objective",

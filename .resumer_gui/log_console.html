@@ -1,0 +1,58 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --line-soft: #20242a;
+      --text: #d8dde6;
+      --muted: #8f96a3;
+      --event: #82b4ff;
+      --warn: #f6bd3f;
+      --bad: #e35a67;
+      --good: #28cc67;
+    }
+    body { margin: 0; background: transparent; font-family: 'JetBrains Mono', monospace; }
+    .log-shell {
+      background: #05070c;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 0.45rem 0.5rem;
+      height: 470px;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    .log-row {
+      display: grid;
+      grid-template-columns: 80px 76px 1fr;
+      gap: 9px;
+      align-items: start;
+      font-size: 0.77rem;
+      line-height: 1.3;
+      padding: 0.17rem 0.22rem;
+      border-radius: 6px;
+      margin-bottom: 2px;
+      color: var(--text);
+    }
+    .log-row:hover { background: rgba(130, 180, 255, 0.06); }
+    .log-time { color: var(--muted); }
+    .log-stream { color: #67da93; font-weight: 700; letter-spacing: 0.03em; }
+    .log-msg { margin: 0; white-space: pre-wrap; word-break: break-word; tab-size: 4; }
+    .log-section .log-msg { font-weight: 700; }
+    .log-info .log-msg { color: var(--text); }
+    .log-event .log-msg { color: var(--event); }
+    .log-success .log-msg { color: var(--good); }
+    .log-warn .log-msg { color: var(--warn); }
+    .log-error .log-msg { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <div id="log-shell" class="log-shell"><div class='log-row log-info'><span class='log-time'>22:26:10</span><span class='log-stream'>STDOUT</span><pre class='log-msg'>Waiting for run...</pre></div></div>
+  <script>
+    const shell = document.getElementById('log-shell');
+    if (shell) shell.scrollTop = shell.scrollHeight;
+  </script>
+</body>
+</html>

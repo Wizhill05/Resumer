@@ -7,7 +7,10 @@ Usage:
 Optional flags:
     --jd    <path>  Job description file     (default: input/job_description.txt)
     --data  <path>  Master profile JSON       (default: input/truth.json)
-    --max-iterations <n>                      (default: 5)
+    --max-iterations <n>                      (default: 10)
+    --job-label <name>                        (optional, skips prompt)
+    --model <provider/model-id>               (optional runtime model override)
+    --api-key-env <ENV_VAR>                   (optional API key env override)
     --no-objective    Omit the objective section
     --no-education    Omit the education section
     --no-skills       Omit the skills section
@@ -18,7 +21,8 @@ Optional flags:
     --no-photo        Omit the profile photo
 
 Auth:
-    Set NVIDIA_API_KEY in .env.local (or as an env variable).
+    Set the provider API key env var matching the selected model.
+    Examples: MISTRAL_API_KEY, GEMINI_KEY, OPENROUTER_API_KEY.
 """
 
 from __future__ import annotations
@@ -51,7 +55,6 @@ import os  # noqa: E402
 from pypdf import PdfReader  # noqa: E402
 
 from schemas.resume_schema import TailoredResume  # noqa: E402
-from src.resumer.crew import ResumerCrew  # noqa: E402
 from src.resumer.tools.pdf_tools import set_shared_state  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -317,6 +320,21 @@ def main() -> None:
         help="Max feedback-loop iterations",
     )
     parser.add_argument(
+        "--job-label",
+        default="",
+        help="Optional non-interactive output folder label (skips terminal prompt)",
+    )
+    parser.add_argument(
+        "--model",
+        default="",
+        help="LLM model id, e.g. mistral/mistral-large-latest or gemini/gemini-2.0-flash",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        default="",
+        help="Environment variable name that stores the API key for the selected model",
+    )
+    parser.add_argument(
         "--no-objective", action="store_true", help="Omit the objective section"
     )
     parser.add_argument(
@@ -344,6 +362,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.model.strip():
+        os.environ["RESUMER_MODEL"] = args.model.strip()
+    if args.api_key_env.strip():
+        os.environ["RESUMER_API_KEY_ENV"] = args.api_key_env.strip()
+
+    # Import crew after model env is configured so runtime model selection takes effect.
+    from src.resumer.crew import ResumerCrew, resolve_llm_runtime  # noqa: E402
+
+    selected_model, selected_key_env, api_key = resolve_llm_runtime()
+
     jd_path = BASE_DIR / args.jd
     data_path = BASE_DIR / args.data
     template_css = BASE_DIR / "template" / "template.css"
@@ -356,10 +384,12 @@ def main() -> None:
             _err(f"File not found: {p}")
             sys.exit(1)
 
-    api_key = os.environ.get("MISTRAL_API_KEY")
     if not api_key:
-        _err("MISTRAL_API_KEY not set. Add it to .env.local or export it.")
+        _err(
+            f"{selected_key_env} not set for model '{selected_model}'. Add it to .env.local or export it."
+        )
         sys.exit(1)
+    _info(f"Model: {selected_model}")
 
     # ── Load data ────────────────────────────────────────────────────────
     _step(1, "Loading inputs…")
@@ -376,7 +406,13 @@ def main() -> None:
 
     # ── Ask for job name & create output folder ──────────────────────────
     _step(2, "Setting up output folder…")
-    job_label = input(f"{_CYAN}  ?  Job/Company name for this run: {_RESET}").strip()
+    if args.job_label.strip():
+        job_label = args.job_label.strip()
+        _info(f"Job/Company name for this run: {job_label}")
+    else:
+        job_label = input(
+            f"{_CYAN}  ?  Job/Company name for this run: {_RESET}"
+        ).strip()
     if not job_label:
         job_label = "untitled_run"
     folder_name = _sanitize_folder_name(job_label)

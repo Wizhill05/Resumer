@@ -24,9 +24,40 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 
+_DEFAULT_MODEL = "mistral/mistral-large-latest"
+
+
+def resolve_llm_runtime() -> tuple[str, str, str | None]:
+    """Resolve model name and matching API key env var for runtime."""
+    model = (os.environ.get("RESUMER_MODEL") or _DEFAULT_MODEL).strip()
+    key_env = (os.environ.get("RESUMER_API_KEY_ENV") or "").strip()
+
+    if not key_env:
+        model_prefix_to_env = (
+            ("mistral/", "MISTRAL_API_KEY"),
+            ("gemini/", "GEMINI_KEY"),
+            ("google/", "GEMINI_KEY"),
+            ("openrouter/", "OPENROUTER_API_KEY"),
+            ("anthropic/", "ANTHROPIC_API_KEY"),
+            ("openai/", "OPENAI_API_KEY"),
+        )
+        for prefix, env_name in model_prefix_to_env:
+            if model.startswith(prefix):
+                key_env = env_name
+                break
+
+    if not key_env:
+        key_env = "MISTRAL_API_KEY"
+
+    api_key = os.environ.get(key_env)
+    return model, key_env, api_key
+
+
+_resolved_model, _resolved_key_env, _resolved_api_key = resolve_llm_runtime()
+
 nim_llm = LLM(
-    model="mistral/mistral-large-latest",
-    api_key=os.environ.get("MISTRAL_API_KEY"),
+    model=_resolved_model,
+    api_key=_resolved_api_key,
     temperature=0.7,
     max_tokens=40000,
     top_p=0.9,

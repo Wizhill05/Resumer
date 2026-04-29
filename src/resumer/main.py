@@ -304,8 +304,13 @@ def main() -> None:
         description="CrewAI agent: generate a 1-page tailored resume."
     )
     parser.add_argument(
-        "--jd",
-        default="input/job_description.txt",
+        "--jd-text",
+        default="",
+        help="Raw job description text",
+    )
+    parser.add_argument(
+        "--jd-file",
+        default="",
         help="Path to job description text file",
     )
     parser.add_argument(
@@ -323,6 +328,11 @@ def main() -> None:
         "--job-label",
         default="",
         help="Optional non-interactive output folder label (skips terminal prompt)",
+    )
+    parser.add_argument(
+        "--url",
+        default="",
+        help="Job posting URL to scrape. When provided, --jd is ignored and the JD is extracted from the page.",
     )
     parser.add_argument(
         "--model",
@@ -372,14 +382,14 @@ def main() -> None:
 
     selected_model, selected_key_env, api_key = resolve_llm_runtime()
 
-    jd_path = BASE_DIR / args.jd
     data_path = BASE_DIR / args.data
     template_css = BASE_DIR / "template" / "template.css"
 
     _banner("🤖  Resume Agent v3 — CrewAI")
 
     # ── Validate inputs ──────────────────────────────────────────────────
-    for p in [jd_path, data_path, template_css]:
+    paths_to_check = [data_path, template_css]
+    for p in paths_to_check:
         if not p.exists():
             _err(f"File not found: {p}")
             sys.exit(1)
@@ -394,8 +404,76 @@ def main() -> None:
     # ── Load data ────────────────────────────────────────────────────────
     _step(1, "Loading inputs…")
     profile = json.loads(data_path.read_text(encoding="utf-8"))
-    jd = jd_path.read_text(encoding="utf-8").strip()
     _info(f"Profile: {profile.get('personal_information', {}).get('name', '—')}")
+
+    # ── Research phase (URL mode) ─────────────────────────────────────────
+    jd: str = ""
+    if args.url.strip():
+        _step("1b", "Researching job posting from URL…")
+        _info(f"URL: {args.url.strip()}")
+        
+        try:
+            from src.resumer.tools.scrape_tools import scrape_url
+            _info("Running native headless scraper…")
+            scraped_text = scrape_url(args.url.strip())
+            
+            if scraped_text.startswith("ERROR"):
+                _err(f"Scraper failed: {scraped_text}")
+                sys.exit(1)
+
+            research_crew_instance = ResumerCrew()
+            research_result = research_crew_instance.research_crew().kickoff(
+                inputs={"scraped_text": scraped_text}
+            )
+            # Extract structured pydantic output
+            research_task_output = (
+                research_result.tasks_output[-1]
+                if hasattr(research_result, "tasks_output") and research_result.tasks_output
+                else None
+            )
+            researched_job = None
+            if research_task_output and getattr(research_task_output, "pydantic", None):
+                researched_job = research_task_output.pydantic
+            else:
+                # Fallback: try to parse raw output as JSON
+                raw = getattr(research_task_output, "raw", "") or str(research_result)
+                try:
+                    from schemas.resume_schema import ResearchedJob
+                    raw_json = _extract_json_object(raw)
+                    researched_job = ResearchedJob.model_validate_json(raw_json)
+                except Exception:
+                    pass
+
+            if researched_job and not researched_job.job_description.startswith("ERROR"):
+                jd = researched_job.job_description.strip()
+                _ok(f"Job description extracted ({len(jd):,} chars)")
+                # Auto-set job label from extracted run_title if not already given
+                if not args.job_label.strip() and researched_job.run_title.strip():
+                    args.job_label = researched_job.run_title.strip()
+                    _ok(f"Auto run title: {args.job_label}")
+            elif researched_job:
+                _err(f"Research agent reported: {researched_job.job_description}")
+                sys.exit(1)
+            else:
+                _err("Research agent returned no usable output. Cannot proceed.")
+                sys.exit(1)
+        except Exception as exc:
+            _err(f"Research phase failed: {exc}")
+            sys.exit(1)
+    else:
+        # Text mode: load JD from file or raw CLI argument
+        if args.jd_file.strip():
+            jd_path = Path(args.jd_file.strip())
+            if jd_path.exists():
+                jd = jd_path.read_text(encoding="utf-8").strip()
+                
+        if not jd:
+            jd = args.jd_text.strip()
+            
+        if not jd:
+            _err("No job description provided! Use --url, --jd-file, or --jd-text.")
+            sys.exit(1)
+
     _info(f"Job description: {len(jd):,} chars")
 
     # ── Apply omission flags to profile ──────────────────────────────────
@@ -422,6 +500,8 @@ def main() -> None:
     try:
         outputs_base.mkdir(exist_ok=True)
         output_dir.mkdir(exist_ok=True)
+        # Save the job description in the run folder for reference
+        (output_dir / "job_description.txt").write_text(jd, encoding="utf-8")
     except PermissionError as e:
         _err(f"Cannot create output folder: {e}")
         _err("Try running the terminal as Administrator or check folder permissions.")

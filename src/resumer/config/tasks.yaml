@@ -4,7 +4,7 @@ write_resume:
     tailored resume.
 
     Step 1 — Draft the resume content following these rules:
-    - ⚡ TOP PRIORITY — ATS KEYWORD RULE: Extract ALL important keywords, technologies, and phrases from the job description and weave them naturally into the resume — in the Professional Summary, Skills, Project descriptions, and Experience bullets. Even if a keyword is NOT in the candidate's profile (truth.json), you MUST still include it in the Skills section or work it into bullet points naturally. ATS systems scan for exact keyword matches, so missing even one important JD keyword is a failure.
+    - TOP PRIORITY — ATS KEYWORD RULE: Extract ALL important keywords, technologies, and phrases from the job description and weave them naturally into the resume — in the Professional Summary, Skills, Project descriptions, and Experience bullets. Even if a keyword is NOT in the candidate's profile (truth.json), you MUST still include it in the Skills section or work it into bullet points naturally. ATS systems scan for exact keyword matches, so missing even one important JD keyword is a failure.
     - The PROFESSIONAL SUMMARY must be 1-2 lines, explaining why you are a good fit for the job and giving a summary. For example: "Experienced Project Focused Software engineering student seeking full time Front end development".
     - Select 2-3 projects most relevant to the job. Prefer 3 projects if 3 or more are related to the job's theme. For each, write a description paragraph that fills exactly 2 rendered lines, mentioning the relevant project tech stack, statistics, and what the project does. For example: "Maintainer and lead engineer for Docusaurus v2 - a React based static site generator which powers the documentation of many of Meta's Open Source Projects — React Native, Jest, Relay, Reason, etc. Used by 7.6k projects on GitHub."
     - Provide the project's GitHub path (e.g. `username/repo`) if available, to be made clickable next to the title.
@@ -76,3 +76,38 @@ shorten_resume:
   expected_output: >
     The fully modified TailoredResume JSON object representing the newly shortened resume.
   agent: resume_shortener
+
+research_job:
+  description: >
+    The following is the raw scraped text of a job posting:
+    
+    --------------------------------------------------------------------------------
+    {scraped_text}
+    --------------------------------------------------------------------------------
+
+    Carefully read the text above and extract:
+    1. The FULL job description: include the role summary, all responsibilities,
+       required skills, qualifications, and any other requirements. Do NOT
+       summarize or paraphrase — preserve every technical keyword and requirement
+       exactly as written. The resume pipeline depends on these keywords for ATS
+       matching, so missing keywords is a critical failure.
+    2. A short run title in the format "Company – Role Title" using an en-dash,
+       e.g. "Google – Software Engineer" or "Zepto – Backend Developer".
+       Infer the company name and role title from the page content.
+
+    If the page is clearly a complete login wall, CAPTCHA, or absolutely contains no job
+    content at all, set job_description to exactly:
+    "ERROR: Could not extract job description — page requires login or returned no content."
+    and set run_title to "unknown_job".
+
+    However, if you see ANY job-related text, requirements, or company information,
+    extract it to the best of your ability, even if the formatting is messy or incomplete.
+    Do NOT output the ERROR string if there is usable job text.
+
+    STRICT RULE: Do NOT invent or hallucinate any job requirements or company names.
+    Only use what is present in the scraped page content.
+  expected_output: >
+    A ResearchedJob JSON object with two fields:
+    - job_description: the full extracted job description text
+    - run_title: a short "Company – Role" label for this run
+  agent: job_researcher

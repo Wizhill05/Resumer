@@ -1,0 +1,52 @@
+WHO ARE WE?
+
+We are a bunch of super enthusiastic, passionate, and highly driven people, working to achieve a common goal! We believe that work and the workplace should be joyful and always buzzing with energy!
+
+CloudSEK, one of India’s most trusted Cyber security product companies, is on a mission to build the world’s fastest and most reliable AI technology that identifies and resolves digital threats in real-time. The central proposition is leveraging Artificial Intelligence and Machine Learning to create a quick and reliable analysis and alert system that provides rapid detection across multiple internet sources, precise threat analysis, and prompt resolution with minimal human intervention.
+
+Founded in 2015, headquartered at Singapore, we are proud to say that we’ve grown at a frenetic pace and have been able to achieve some accolades along the way, including:
+
+CloudSEK’s Product Suite:
+
+CloudSEK XVigil constantly maps a customer’s digital assets, identifies threats and enriches them with cyber intelligence, and then provides workflows to manage and remediate all identified threats including takedown support.
+A powerful Attack Surface Monitoring tool that gives visibility and intelligence on customers’ attack surfaces. CloudSEK's BeVigil uses a combination of Mobile, Web, Network and Encryption Scanners to map and protect known and unknown assets.
+CloudSEK’s Contextual AI SVigil identifies software supply chain risks by monitoring Software, Cloud Services, and third-party dependencies.
+
+Key Milestones:
+
+2016: Launched our first product.
+2018: Secured Pre-series A funding.
+2019: Expanded operations to India, Southeast Asia, and the Americas.
+2020: Won the NASSCOM-DSCI Excellence Award for Security Product Company of the Year.
+2021: Raised $7M in Series A funding led by MassMutual Ventures.
+Awards & Recognition: Won NetApp Excellerator's "Best Growth Strategy Award," CloudSEK XVigil joined NVIDIA Inception Program, and won the NASSCOM Emerge 50 Cybersecurity Award.
+2025: Secured $19 million in funding led by Tenacity Ventures, Commvault.
+ABOUT THE ROLE
+We are looking for frontend engineers who are obsessed with technology, have a creative eye to solve problems and love to make an impact!
+
+What are we looking for?
+Great programming skills with expertise in Frontend.
+JavaScript- Hands-on experience working with Object Oriented JavaScript (OOJS), JavaScript libraries and their practical uses in building complex interactive experiences.
+Experience working in ReactJS.
+Understanding of stateful (container) vs stateless (presentational) components and how to break down the application into components
+Understanding of different CSS architectures that go hand-in- hand with ReactJS application development.
+Basic familiarity with prevailing Front End technologies like bootstrap, jQuery, HTML5, or CSS.
+Understanding of WebPack / Babel / SaSS
+What’s in it for you?
+Work with the best company in the external predictive threat intelligence space
+Assured professional and personal growth by working with proficient, experienced, and approachable teams.
+Inclusive and collaborative culture where you get to pitch, follow and implement YOUR ideas.
+Please Note :
+Duration of this internship will be 3-6 Months.
+We are currently looking for candidates who can work from Bangalore office at-least 4 days in a week (we have 5 days working, Mon-Fri.)
+
+Benefits of Joining CloudSEK
+
+We provide an environment where you can develop and enhance your skills while delivering meaningful work that matters. You’ll be rewarded a competitive salary as well as a full spectrum of generous perks and incentives which include:
+
+Flexible working hours.
+Food, unlimited snacks and drinks are all available while at office.
+
+And, the finest part is yet to come! Every now and then we ensure to unwind and have a good time together, which involves games, fun, and soulful music. Feel free to show off your artistic side here!
+
+CloudSEK is an equal opportunity employer and is committed to building a diverse and inclusive workplace. We encourage candidates from all backgrounds to apply.

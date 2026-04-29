@@ -1,0 +1,42 @@
+About Us
+
+Moksha Media Productions is a full-service media and technology company specializing in Ecommerce, AI-driven marketing, 3D, AR, and VR solutions. We partner with growing brands to drive performance, digital growth, and creative excellence.
+
+Role overview
+
+We are looking for a proactive and hands-on AI Intern (Generative AI) to support the development of AI agents, LLM-powered automation tools, and internal AI applications. This role offers practical exposure to building real-world AI systems, implementing RAG pipelines, and experimenting with modern LLM frameworks.
+
+This internship is ideal for students or recent graduates who want hands-on experience working on AI-driven products within a fast-paced media and technology environment.
+
+What You’ll Work With
+
+LangChain & LangGraph
+RAG (Retrieval-Augmented Generation)
+LLM APIs (OpenAI / Gemini / Claude)
+Embeddings & Vector Databases (FAISS / Chroma / Pinecone)
+AI workflow automation
+
+Key Responsibilities
+
+Build AI agents and RAG pipelines using LangChain and LangGraph
+Integrate LLM APIs (OpenAI, Gemini, Claude) into real applications
+Develop AI chatbots and automation workflows
+Work with embeddings and vector databases
+Experiment with prompt engineering and agent orchestration
+Contribute to internal AI product development and maintain clean GitHub documentation
+
+Requirements
+
+Python or Node.js
+Hands-on experience with LangChain
+Basic understanding of RAG, AI agents, and prompt engineering
+Minimum 2 AI projects on GitHub (chatbot, RAG system, automation tool, etc.)
+Experience using GitHub Copilot or AI coding tools
+Currently pursuing or recently completed a degree in Computer Science, Artificial Intelligence, Machine Learning, Data Science, Information Technology
+
+Job Types: Full-time, Internship
+Contract length: 6 months
+
+Pay: ₹10,000.00 - ₹15,000.00 per month
+
+Work Location: In person

@@ -309,6 +309,11 @@ def main() -> None:
         help="Raw job description text",
     )
     parser.add_argument(
+        "--jd-file",
+        default="",
+        help="Path to job description text file",
+    )
+    parser.add_argument(
         "--data",
         default="input/truth.json",
         help="Path to master profile JSON",
@@ -456,10 +461,17 @@ def main() -> None:
             _err(f"Research phase failed: {exc}")
             sys.exit(1)
     else:
-        # Text mode: load JD from raw CLI argument
-        jd = args.jd_text.strip()
+        # Text mode: load JD from file or raw CLI argument
+        if args.jd_file.strip():
+            jd_path = Path(args.jd_file.strip())
+            if jd_path.exists():
+                jd = jd_path.read_text(encoding="utf-8").strip()
+                
         if not jd:
-            _err("No job description provided! Use --url or --jd-text.")
+            jd = args.jd_text.strip()
+            
+        if not jd:
+            _err("No job description provided! Use --url, --jd-file, or --jd-text.")
             sys.exit(1)
 
     _info(f"Job description: {len(jd):,} chars")

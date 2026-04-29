@@ -1,0 +1,15 @@
+﻿
+Mode    : FULL DETAILS
+Scraping: https://in.indeed.com/jobs?q=summer+internship+computer+science+students&l=Bengaluru%2C+Karnataka&salaryType=%E2%82%B91%2C20%2C000%2B&radius=25
+
+  Fetching details 1/16: Summer Internship Project...
+uv :   [warn] Empty description. Page title was: 'Blocked - Indeed.com'
+At line:1 char:1
++ uv run python test_indeed_scraper.py --details 2>&1 | Out-File -Encod ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  [warn] Empty ...d - Indeed.com':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Fetching details 2/16: Generative AI Engineering Intern...
+  [warn] Empty description. Page title was: 'Blocked - Indeed.com'
+  Fetching details 3/16: Internship Opportunity: Software Testing Interns-K...

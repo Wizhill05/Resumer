@@ -1,0 +1,48 @@
+We are seeking to fill multiple embedded software engineering internship roles.
+
+Minimum Qualifications
+
+Embedded: Design, develop, and refine IoT devices. Integrate sensors, establish wireless networks, ensure data security, and optimize system performance.
+Experience with embedded Linux, embedded programming, microcontrollers, peripherals, and its basic electronics. Proficient in communication protocol like i2c, spi, uart, WiFi, and server protocol like Http, Https, MQTT from embedded devices.
+Electronics: Experience with testing and debugging embedded electronics. Operating knowledge of standard electronic test equipment is nice to have.
+Languages: Experience of coding Python and familiarity with C required.
+APIs: Experience working with Rest APIs and request/response or client/server model.
+Education: Bachelor's degree in a technical or engineering field, or equivalent practical experience.
+Tools: Experience with version control (Git).
+
+Responsibilities:
+
+Help design, build, manage and evolve device embedded software components.
+Implement IoT device-to-cloud communications using MQTT / HTTP / REST protocols.
+
+Keywords:
+
+Python, C, Embedded Firmware, IoT, WiFi, MQTT, HTTP, sensors, MCU, BLE, I2C, SPI, UART, Linkit.
+
+Expectations:
+
+Write clean, well-designed code.
+Produce detailed specifications.
+Build reusable code and libraries for future use.
+Troubleshoot, test, and maintain the software and databases to ensure strong optimization and functionality.
+Keep security and reliability as a design principle rather than an afterthought.
+Build reusable code and libraries for future use.
+Optimize for speed, scalability, and performance.
+
+About the Role:
+
+Our product team is building robotics / IoT devices, cloud services & mobile apps to make the last mile of E-Commerce logistics simpler, safer, and speedier. The work will be challenging and innovative and offer rich learning experiences. We will expect you to exhibit technical expertise in managing individual project priorities, deadlines, and deliverables. We value teamwork, initiative, problem-solving skills, high integrity, and strong work ethic, and self-motivation across our team.
+
+Job Perks
+Lunch service, Balanced predictable work hours, and well-connected location.
+
+Apply for Position:
+
+Candidates please submit the form: https://forms.gle/J89JRMwSPS4fYdCj8 and upload your latest resume (as a PDF file only).
+
+Job Type: Internship
+Contract length: 6-9 months
+
+Pay: ₹20,000.00 per month
+
+Work Location: In person

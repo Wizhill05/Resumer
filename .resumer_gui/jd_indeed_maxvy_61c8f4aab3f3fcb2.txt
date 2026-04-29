@@ -1,0 +1,45 @@
+Location : Bangalore
+
+Experience : Fresher
+
+Education : B.E, M.E, M.Tech, B.Tech
+
+Role :
+
+Role
+
+
+Intern with basic C and Python knowledge who is interested in learning and working with device communication.
+
+
+Responsibilities
+
+
+Write simple C and Python scripts to communicate with hardware (UART/USB).
+
+
+Test and debug data transfer between PC and device.
+
+
+Document code and test results.
+
+
+Skills Required
+
+
+Basic knowledge of C and Python programming.
+
+
+Basic knowledge in I2C, SPI and UART.
+
+
+Qualification
+
+
+Students pursuing B.E./ B.Tech / M.Tech in Computer Science, Electronics, or related fields.
+
+Job Description :
+
+We are looking for motivated interns who are passionate about programming and eager to explore hardware–software integration. This internship offers hands-on experience in device communication, where you will learn to write and test scripts in C and Python, work with interfaces like UART, USB, I2C, and SPI, and gain practical exposure to embedded systems development. You will work closely with our engineering team, contributing to real-time testing and debugging while enhancing your technical skills.
+
+Salary : Unpaid Intern

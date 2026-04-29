@@ -22,6 +22,9 @@ for _p in (WORKSPACE_ROOT, SRC_DIR):
         sys.path.insert(0, str(_p))
 
 from gui.services.runner import LogEntry, ResumeRunController  # noqa: E402
+from gui.services.job_hunt_controller import JobHuntController  # noqa: E402
+from schemas.indeed_schema import IndeedJob  # noqa: E402
+from resumer.tools.indeed_scraper import scrape_indeed_search  # noqa: E402
 
 
 OUTPUTS_ROOT = WORKSPACE_ROOT / "outputs"
@@ -108,6 +111,12 @@ def _ensure_controller() -> ResumeRunController:
     return st.session_state.runner
 
 
+def _ensure_job_hunt_controller() -> JobHuntController:
+    if "job_hunt_controller" not in st.session_state:
+        st.session_state.job_hunt_controller = JobHuntController(WORKSPACE_ROOT)
+    return st.session_state.job_hunt_controller
+
+
 def _inject_figma_css() -> None:
     st.markdown(
         """
@@ -131,10 +140,7 @@ def _inject_figma_css() -> None:
         .stApp {
             font-family: 'Manrope', sans-serif;
             color: var(--text);
-            background:
-                radial-gradient(900px 620px at 15% -8%, rgba(36, 204, 90, 0.06), transparent 60%),
-                radial-gradient(900px 620px at 110% 0%, rgba(255, 255, 255, 0.02), transparent 55%),
-                var(--bg);
+            background: var(--bg);
         }
 
         [data-testid="stHeader"],
@@ -155,9 +161,9 @@ def _inject_figma_css() -> None:
 
         /* ─── st.container(border=True) card styling ─── */
         [data-testid="stVerticalBlockBorderWrapper"] {
-            background: linear-gradient(180deg, rgba(16, 18, 24, 0.98), rgba(10, 12, 16, 0.98)) !important;
+            background: rgba(16, 18, 24, 0.98) !important;
             border: 1px solid var(--line) !important;
-            border-radius: 14px !important;
+            border-radius: 0px !important;
             box-shadow:
                 inset 0 1px 0 0 rgba(255,255,255,0.03),
                 0 2px 12px rgba(0,0,0,0.25) !important;
@@ -207,30 +213,35 @@ def _inject_figma_css() -> None:
             color: var(--muted);
         }
 
-        /* ─── Signal Bars ─── */
+        /* ─── Signal Spinner ─── */
         .signal {
             display: inline-flex;
-            gap: 5px;
             align-items: center;
             margin-left: 0.45rem;
         }
 
-        .signal span {
-            display: inline-block;
-            width: 30px;
-            height: 7px;
-            border-radius: 999px;
-            background: #3a3d44;
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-left-color: var(--green);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
         }
 
-        .signal .on  { background: var(--green); }
-        .signal .warn { background: var(--yellow); }
-        .signal .bad  { background: var(--red); }
+        .spinner.bad {
+            border-left-color: var(--red);
+            animation: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
 
         /* ─── Resume Preview ─── */
         .preview-shell {
             border: 1px solid var(--line);
-            border-radius: 8px;
+            border-radius: 0px;
             overflow: hidden;
             background: #f7f7f8;
             min-height: 780px;
@@ -278,14 +289,14 @@ def _inject_figma_css() -> None:
             background: #13161c !important;
             border-color: #2a2e36 !important;
             color: #f1f2f5 !important;
-            border-radius: 8px !important;
+            border-radius: 0px !important;
         }
 
         .stSelectbox [data-baseweb="select"] > div {
             background: #13161c !important;
             border-color: #2a2e36 !important;
             color: #f1f2f5 !important;
-            border-radius: 8px !important;
+            border-radius: 0px !important;
         }
 
         .stSlider [data-baseweb="slider"] {
@@ -295,7 +306,7 @@ def _inject_figma_css() -> None:
         .stButton > button,
         .stDownloadButton > button,
         .stFormSubmitButton > button {
-            border-radius: 10px !important;
+            border-radius: 0px !important;
             border: 1px solid #2f343a !important;
             background: #181c24 !important;
             color: #f2f4f7 !important;
@@ -315,7 +326,7 @@ def _inject_figma_css() -> None:
 
         /* For the iframe in the logs panel — remove Streamlit's padding */
         iframe {
-            border-radius: 8px !important;
+            border-radius: 0px !important;
         }
 
         /* ─── Expander styling ─── */
@@ -356,16 +367,14 @@ def _status_badge(state: str) -> str:
 def _signal_markup(state: str) -> str:
     state = state.lower()
     if state in {"running", "starting"}:
-        return "<span class='on'></span><span class='on'></span><span></span>"
+        return "<div class='spinner'></div>"
     if state == "completed":
-        return (
-            "<span class='on'></span><span class='on'></span><span class='on'></span>"
-        )
+        return "<div class='spinner' style='border-left-color: var(--green); animation: none; border-radius: 50%; opacity: 0.5;'></div>"
     if state in {"failed"}:
-        return "<span class='bad'></span><span class='bad'></span><span></span>"
+        return "<div class='spinner bad'></div>"
     if state in {"stopping", "stopped"}:
-        return "<span class='warn'></span><span></span><span></span>"
-    return "<span></span><span></span><span></span>"
+        return "<div class='spinner' style='border-left-color: var(--yellow); animation: none;'></div>"
+    return ""
 
 
 def _list_output_folders() -> list[Path]:
@@ -395,7 +404,7 @@ def _default_artifact_name(artifacts: list[Path]) -> str:
     return artifacts[0].name
 
 
-def _build_logs_html(logs: list[LogEntry]) -> str:
+def _build_logs_html(logs: list[LogEntry], detailed: bool = True) -> str:
     rows: list[str] = []
     source = logs[-1200:]
 
@@ -407,12 +416,37 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
         ]
 
     for entry in source:
-        ts = datetime.fromtimestamp(entry.ts).strftime("%H:%M:%S")
-        msg = html.escape(entry.text).replace("\t", "    ")
-        lower_msg = entry.text.lower()
-        section_class = (
-            " log-section" if any(k in lower_msg for k in LOG_SECTION_KEYS) else ""
+        first_line_raw = entry.text.split("\n")[0].strip()
+        lower_first_line = first_line_raw.lower()
+        is_milestone = any(k in lower_first_line for k in LOG_SECTION_KEYS)
+        is_step = (
+            "[Step" in first_line_raw
+            or "Agent:" in first_line_raw
+            or "Task:" in first_line_raw
+            or "Name:" in first_line_raw
         )
+
+        # ── CONCISE MODE FILTERING ──
+        if not detailed:
+            if not (is_milestone or is_step or entry.level in {"warn", "error"}):
+                continue
+
+        ts = datetime.fromtimestamp(entry.ts).strftime("%H:%M:%S")
+        section_class = " log-section" if is_milestone else ""
+        msg_text = entry.text
+        msg_html = html.escape(msg_text).replace("\t", "    ")
+
+        # ── COLLAPSIBLE BLOCKS (Detailed Mode) ──
+        needs_collapse = detailed and (len(msg_text) > 250 or "\n" in msg_text.strip())
+
+        if needs_collapse:
+            title_text = first_line_raw[:120] + (
+                " ..." if len(first_line_raw) > 120 else ""
+            )
+            first_line_es = html.escape(title_text)
+            content = f"<details><summary>{first_line_es}</summary><pre class='log-msg'>{msg_html}</pre></details>"
+        else:
+            content = f"<pre class='log-msg'>{msg_html}</pre>"
 
         rows.append(
             "".join(
@@ -420,7 +454,7 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
                     f"<div class='log-row log-{html.escape(entry.level)}{section_class}'>",
                     f"<span class='log-time'>{html.escape(ts)}</span>",
                     f"<span class='log-stream'>>>> {html.escape(entry.stream.upper())}</span>",
-                    f"<pre class='log-msg'>{msg}</pre>",
+                    content,
                     "</div>",
                 ]
             )
@@ -496,6 +530,26 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
       word-break: break-word;
       tab-size: 4;
     }}
+    details {{ margin-top: 1px; }}
+    summary {{
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.75rem;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      transition: color 0.15s;
+    }}
+    summary:hover {{ color: var(--text); }}
+    summary::-webkit-details-marker {{ display: none; }}
+    summary::before {{
+      content: "▶";
+      font-size: 0.6rem;
+      margin-right: 6px;
+      transition: transform 0.2s;
+    }}
+    details[open] summary {{ margin-bottom: 6px; color: var(--prompt-green); }}
+    details[open] summary::before {{ transform: rotate(90deg); }}
     .log-section .log-msg {{ font-weight: 700; }}
     .log-info .log-msg {{ color: var(--text); }}
     .log-event .log-msg {{ color: var(--event); }}
@@ -547,7 +601,6 @@ def _render_resume_panel(controller: ResumeRunController) -> None:
             if active_folder_name in folder_labels
             else 0
         )
-
 
         # Title
         st.markdown("<div class='card-title'>Resumer</div>", unsafe_allow_html=True)
@@ -618,7 +671,7 @@ def _render_resume_panel(controller: ResumeRunController) -> None:
             st.code(text, language="markdown")
 
         st.download_button(
-            "⬇  Download",
+            "Download",
             data=payload,
             file_name=selected_artifact_path.name,
             mime="application/pdf"
@@ -647,10 +700,23 @@ def _render_logs_panel(controller: ResumeRunController) -> None:
             unsafe_allow_html=True,
         )
 
+        detailed_view = True
+        log_mode = st.radio(
+            "Log View Mode",
+            options=["Concise", "Detailed"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="log_view_mode",
+        )
+        if log_mode == "Concise":
+            detailed_view = False
+
         gui_tmp_dir = WORKSPACE_ROOT / ".resumer_gui"
         gui_tmp_dir.mkdir(parents=True, exist_ok=True)
         log_view_path = gui_tmp_dir / "log_console.html"
-        log_view_path.write_text(_build_logs_html(controller.logs), encoding="utf-8")
+        log_view_path.write_text(
+            _build_logs_html(controller.logs, detailed=detailed_view), encoding="utf-8"
+        )
 
         log_url = _local_file_url(log_view_path)
         if log_url:
@@ -678,7 +744,7 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
         # ── Job source toggle (Outside form for instant reactivity) ──
         jd_mode = st.radio(
             "Job Source",
-            options=["📝 Text Mode", "🔗 URL Mode"],
+            options=["Text Mode", "URL Mode"],
             horizontal=True,
             key="jd_mode_radio",
         )
@@ -693,7 +759,7 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                     key="run_name_input",
                 )
 
-                if jd_mode == "🔗 URL Mode":
+                if jd_mode == "URL Mode":
                     job_url = st.text_input(
                         "Job Posting URL",
                         placeholder="https://www.linkedin.com/jobs/view/... or any job board URL",
@@ -725,12 +791,12 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                 )
                 # Buttons in the right column, stacked
                 start_run = st.form_submit_button(
-                    "▶  Run Pipeline",
+                    "Run Pipeline",
                     disabled=controller.is_running(),
                     use_container_width=True,
                 )
                 stop_run = st.form_submit_button(
-                    "⏹  Stop",
+                    "Stop",
                     disabled=not controller.is_running(),
                     use_container_width=True,
                 )
@@ -787,7 +853,11 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                 # If in URL mode and run name still looks like the auto-generated default,
                 # pass empty string so main.py can auto-fill from the researcher's output.
                 is_default_name = run_name.startswith("run_")
-                effective_label = "" if (job_url.strip() and is_default_name) else run_name or "run_manual"
+                effective_label = (
+                    ""
+                    if (job_url.strip() and is_default_name)
+                    else run_name or "run_manual"
+                )
 
                 controller.start_run(
                     jd_text=jd_text.strip(),
@@ -804,6 +874,151 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                 st.error(f"Could not start run: {exc}")
 
 
+def _render_job_hunter_tab(hunt_controller: JobHuntController) -> None:
+    # Top controls for scraping
+    with st.container(border=True):
+        st.markdown("<div class='card-title'>Indeed Job Hunter</div>", unsafe_allow_html=True)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            indeed_url = st.text_input("Indeed Search URL", placeholder="https://in.indeed.com/jobs?q=...", key="hunter_url_input")
+        with col2:
+            st.markdown("<div style='margin-top: 1.85rem;'></div>", unsafe_allow_html=True)
+            scrape_btn = st.button("Scrape Jobs", use_container_width=True)
+
+    if scrape_btn and indeed_url:
+        with st.spinner("Scraping Indeed (this fetches full descriptions and takes a moment)..."):
+            try:
+                jobs = scrape_indeed_search(indeed_url, fetch_details=True)
+                st.session_state.scraped_jobs = jobs
+                # Reset selections when new jobs are scraped
+                if "selected_jobs" in st.session_state:
+                    st.session_state.selected_jobs = {job.job_id: True for job in jobs}
+                else:
+                    st.session_state.selected_jobs = {job.job_id: True for job in jobs}
+            except Exception as e:
+                st.error(f"Scraping failed: {e}")
+
+    # Display scraped jobs if they exist
+    if "scraped_jobs" in st.session_state and st.session_state.scraped_jobs:
+        jobs: list[IndeedJob] = st.session_state.scraped_jobs
+        
+        # Ensure selections dict exists
+        if "selected_jobs" not in st.session_state:
+            st.session_state.selected_jobs = {job.job_id: True for job in jobs}
+            
+        with st.container(border=True):
+            st.markdown(f"<div class='card-title' style='margin-bottom: 1rem;'>Scraped Jobs ({len(jobs)})</div>", unsafe_allow_html=True)
+            
+            # Setup configuration for the run
+            preset_names = list(MODEL_PRESETS.keys())
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                preset = st.selectbox("Model Selection", options=preset_names, index=0, key="hunt_model")
+            with c2:
+                data_path = st.text_input("Master Profile Path", value="input/truth.json", key="hunt_data_path")
+            with c3:
+                max_iterations = st.slider("No of Iterations", min_value=1, max_value=20, value=10, key="hunt_max_iters")
+            with c4:
+                max_concurrent = st.slider("Max Concurrent Runs", min_value=1, max_value=10, value=2, key="hunt_max_concurrent")
+            
+            preset_model, preset_key_env = MODEL_PRESETS[preset]
+            final_model = preset_model
+            final_key_env = preset_key_env
+            if preset == "Custom":
+                final_model = st.text_input("Custom Model ID", value="mistral/mistral-large-latest", key="hunt_custom_model")
+                final_key_env = st.text_input("API Key Env Variable", value="MISTRAL_API_KEY", key="hunt_custom_env")
+
+            # Display the jobs
+            st.markdown("<hr style='border-color: var(--line-soft);'>", unsafe_allow_html=True)
+            for job in jobs:
+                status_text = "Idle"
+                pdf_path = None
+                
+                # Check status from hunt controller
+                job_controller = hunt_controller.get_controller(job.job_id)
+                if job_controller:
+                    status = job_controller.status
+                    status_text = _status_badge(status.state)
+                    if status.final_pdf and status.final_pdf != "-":
+                        pdf_path = Path(status.output_dir) / status.final_pdf
+                
+                col_sel, col_info, col_status = st.columns([0.5, 4, 1.5])
+                with col_sel:
+                    # Checkbox for selection
+                    st.session_state.selected_jobs[job.job_id] = st.checkbox(
+                        "Select", 
+                        value=st.session_state.selected_jobs.get(job.job_id, True), 
+                        key=f"select_{job.job_id}",
+                        label_visibility="collapsed"
+                    )
+                with col_info:
+                    salary_str = f" • {job.salary}" if job.salary else ""
+                    st.markdown(f"**{html.escape(job.title)}**")
+                    st.markdown(f"*{html.escape(job.company)} • {html.escape(job.location)}{html.escape(salary_str)}*")
+                    
+                    snippet_clean = html.escape(job.snippet)
+                    if len(snippet_clean) > 150:
+                        snippet_clean = snippet_clean[:150] + "..."
+                    st.markdown(f"<div style='font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem;'>{snippet_clean}</div>", unsafe_allow_html=True)
+                    
+                    link = job.apply_url if job.apply_url else job.job_url
+                    st.markdown(f"<a href='{link}' target='_blank' style='color: var(--green); font-size: 0.85rem; font-weight: bold;'>Apply Now ↗</a>", unsafe_allow_html=True)
+                
+                with col_status:
+                    st.markdown(f"<div style='margin-bottom: 0.5rem;'>Status: **{status_text}**</div>", unsafe_allow_html=True)
+                    if pdf_path and pdf_path.exists():
+                        with pdf_path.open("rb") as f:
+                            st.download_button(
+                                "Download Resume",
+                                data=f.read(),
+                                file_name=f"{job.company}_Resume.pdf",
+                                mime="application/pdf",
+                                key=f"dl_hunt_{job.job_id}",
+                                use_container_width=True
+                            )
+                st.markdown("<hr style='border-color: var(--line-soft); margin: 0.5rem 0;'>", unsafe_allow_html=True)
+
+            st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                start_hunt = st.button("Generate Selected Resumes", disabled=hunt_controller.hunting, use_container_width=True, type="primary")
+            with col_btn2:
+                stop_hunt = st.button("Stop All", disabled=not hunt_controller.hunting, use_container_width=True)
+
+            if stop_hunt:
+                hunt_controller.stop_hunt()
+                st.rerun()
+
+            if start_hunt:
+                selected_to_run = [j for j in jobs if st.session_state.selected_jobs.get(j.job_id, False)]
+                if not selected_to_run:
+                    st.warning("No jobs selected!")
+                else:
+                    omissions = {
+                        "no_objective": False,
+                        "no_education": False,
+                        "no_skills": False,
+                        "no_projects": False,
+                        "no_experience": False,
+                        "no_activities": False,
+                        "no_applying_for": False,
+                        "no_photo": False,
+                    }
+                    try:
+                        hunt_controller.start_hunt(
+                            selected_jobs=selected_to_run,
+                            data_path=data_path.strip(),
+                            max_iterations=max_iterations,
+                            model=final_model,
+                            api_key_env=final_key_env,
+                            omissions=omissions,
+                            max_concurrent=max_concurrent,
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Could not start hunt: {exc}")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Resumer",
@@ -815,17 +1030,26 @@ def main() -> None:
     _inject_figma_css()
     controller = _ensure_controller()
     controller.poll()
+    
+    hunt_controller = _ensure_job_hunt_controller()
+    hunt_controller.poll_all()
 
-    left_col, right_col = st.columns([1.5, 1.5], gap="medium")
+    tab1, tab2 = st.tabs(["Single Job", "Job Hunter"])
 
-    with left_col:
-        _render_resume_panel(controller)
+    with tab1:
+        left_col, right_col = st.columns([1.5, 1.5], gap="medium")
 
-    with right_col:
-        _render_logs_panel(controller)
-        _render_controls_panel(controller)
+        with left_col:
+            _render_resume_panel(controller)
 
-    if controller.is_running():
+        with right_col:
+            _render_logs_panel(controller)
+            _render_controls_panel(controller)
+
+    with tab2:
+        _render_job_hunter_tab(hunt_controller)
+
+    if controller.is_running() or hunt_controller.hunting:
         time.sleep(1)
         st.rerun()
 

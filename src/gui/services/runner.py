@@ -84,9 +84,8 @@ class ResumeRunController:
 
         self.logs: list[LogEntry] = []
         self.status = PipelineStatus()
-        self._suppress_prompt_block = False
-        self._suppress_profile_block = False
-        self._suppress_final_answer_block = False
+        self._active_block_name: str | None = None
+        self._block_buffer: list[str] = []
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -132,9 +131,20 @@ class ResumeRunController:
             api_key_env,
         ]
 
-        # Either pass a URL to scrape or the raw JD text.
+        # Either pass a URL to scrape, or pass the JD text.
+        # To avoid Windows command-line length limits (8191 chars), write long JD text to a file.
+        jd_file_arg = None
+        if not url.strip() and jd_text.strip():
+            gui_tmp = self.workspace_root / ".resumer_gui"
+            gui_tmp.mkdir(parents=True, exist_ok=True)
+            temp_jd = gui_tmp / f"jd_{job_label}.txt"
+            temp_jd.write_text(jd_text, encoding="utf-8")
+            jd_file_arg = str(temp_jd)
+
         if url.strip():
             cmd += ["--url", url.strip()]
+        elif jd_file_arg:
+            cmd += ["--jd-file", jd_file_arg]
         else:
             cmd += ["--jd-text", jd_text]
 
@@ -199,6 +209,7 @@ class ResumeRunController:
 
         if self._process is not None and self._process.poll() is not None:
             if self.status.state not in {"completed", "failed", "stopped"}:
+                self._flush_block("stdout")
                 code = self._process.returncode
                 self.status.exit_code = code
                 self.status.run_finished_at = time.time()
@@ -250,6 +261,22 @@ class ResumeRunController:
             except Exception:
                 pass
 
+    def _flush_block(self, stream: str) -> None:
+        if not self._active_block_name or not self._block_buffer:
+            self._active_block_name = None
+            self._block_buffer = []
+            return
+
+        text = f"{self._active_block_name}\n" + "\n".join(self._block_buffer)
+        level = self._classify_level(self._active_block_name)
+        entry = LogEntry(ts=time.time(), stream=stream, text=text, level=level)
+        self.logs.append(entry)
+        if len(self.logs) > self.max_log_lines:
+            self.logs = self.logs[-self.max_log_lines :]
+
+        self._active_block_name = None
+        self._block_buffer = []
+
     def _consume_line(self, stream: str, raw_line: str) -> None:
         clean_line = self._normalize_log_line(_strip_ansi(raw_line))
         if not clean_line:
@@ -257,6 +284,8 @@ class ResumeRunController:
 
         synthetic = self._maybe_emit_synthetic_event(clean_line, stream)
         if synthetic is None:
+            # Consumed into buffer or fully dropped
+            self._update_status_from_line(clean_line)
             return
         if synthetic:
             clean_line = synthetic
@@ -304,71 +333,50 @@ class ResumeRunController:
     def _maybe_emit_synthetic_event(self, line: str, stream: str) -> str | None:
         lower = line.lower()
 
-        # Suppress long task prompt dumps.
-        if self._suppress_prompt_block:
+        if self._active_block_name:
             if (
                 "task started" in lower
                 or "final answer" in lower
                 or "task completed" in lower
                 or "task failed" in lower
                 or "crew execution" in lower
+                or ("step" in lower and "]" in lower)
+                or "target job description:" in lower
             ):
-                self._suppress_prompt_block = False
+                self._flush_block(stream)
             else:
+                self._block_buffer.append(line)
                 return None
 
-        # Suppress large injected profile JSON dumps.
-        if self._suppress_profile_block:
-            if "target job description:" in lower:
-                self._suppress_profile_block = False
-                return "Job description injected"
+        if (
+            lower.startswith("task: ")
+            or "task: given the candidate" in lower
+            or "step 1 — draft the resume content" in lower
+        ):
+            self._flush_block(stream)
+            # Find a nice generic name for it.
+            self._active_block_name = "Task prompt given"
+            self._block_buffer.append(line)
             return None
-
-        # Suppress verbose final structured JSON answer block.
-        if self._suppress_final_answer_block:
-            if "task completed" in lower or "task failed" in lower:
-                self._suppress_final_answer_block = False
-            else:
-                return None
-
-        if "task: given the candidate's master profile" in lower:
-            self._suppress_prompt_block = True
-            return "System prompt given"
-
-        if "step 1 — draft the resume content" in lower:
-            self._suppress_prompt_block = True
-            return "System prompt given"
 
         if "candidate profile:" in lower:
-            self._suppress_profile_block = True
-            return "Candidate profile injected"
+            self._flush_block(stream)
+            self._active_block_name = "Candidate profile injected"
+            self._block_buffer.append(line)
+            return None
+
+        if "target job description:" in lower:
+            self._flush_block(stream)
+            self._active_block_name = "Job description injected"
+            self._block_buffer.append(line)
+            return None
 
         if "final answer:" in lower:
-            self._suppress_final_answer_block = True
-            return "Agent returned structured response"
-
-        # Drop noisy JSON-like lines that clutter console view.
-        json_noise_markers = (
-            '"personal_information"',
-            '"education"',
-            '"skills"',
-            '"projects"',
-            '"experience"',
-            '"activities"',
-            '"photo"',
-            '"coursework"',
-            '"numerical data"',
-            "{",
-            "}",
-            "[",
-            "]",
-        )
-        if lower in {"{", "}", "[", "]", "},", "],"}:
-            return None
-        if any(marker in lower for marker in json_noise_markers):
+            self._flush_block(stream)
+            self._active_block_name = "Agent returned structured response"
+            self._block_buffer.append(line)
             return None
 
-        # Make shortener phase explicit in logs.
         if "draft iteration" in lower and "/" in line and not line.startswith("Draft"):
             return f"{line}"
         if "shorten_resume" in lower:
@@ -378,11 +386,11 @@ class ResumeRunController:
 
     def _classify_level(self, line: str) -> str:
         lower = line.lower()
-        if "traceback" in lower or "error" in lower or "✗" in line:
+        if "traceback" in lower or "error" in lower:
             return "error"
-        if "warning" in lower or "⚠" in line:
+        if "warning" in lower:
             return "warn"
-        if "✅" in line or "approved" in lower:
+        if "approved" in lower:
             return "success"
         if "[step" in lower or "agent" in lower or "task" in lower:
             return "event"

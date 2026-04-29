@@ -1,0 +1,48 @@
+Internship Opportunity: Software Testing Interns
+
+Location: KR Puram (TIn Factory)
+Duration: 3 Months
+Future Scope: Permanent role based on performance
+
+About the Role
+
+We are looking for enthusiastic and driven interns to join our Testing team. This internship is designed for individuals who want to gain hands-on experience in both manual and automation testing while working on real-time projects.
+
+During the first 3 months, this will be an internship. Based on your performance, dedication, and contribution, you will be considered for a permanent offer letter with full-time employment.
+
+Responsibilities
+
+Execute manual test cases and report bugs effectively
+Assist in designing and maintaining automated test scripts
+Collaborate with developers and QA team to ensure product quality
+Document test results and contribute to continuous improvement
+Learn and apply industry best practices in testing
+
+Requirements
+
+Basic knowledge of manual testing concepts
+Familiarity with automation testing tools (e.g., Selenium, JUnit, TestNG, or similar)
+Strong analytical and problem-solving skills
+Attention to detail and eagerness to learn
+Ability to work collaboratively in a team environment
+
+What We Offer
+
+Real-world project exposure in a professional environment
+Mentorship from experienced QA engineers
+Opportunity to transition into a permanent role based on performance
+Certificate of Internship completion
+
+Job Type: Internship
+
+Pay: ₹12,000.00 - ₹15,000.00 per month
+
+Application Question(s):
+
+Can you join immediately?
+
+Education:
+
+Bachelor's (Preferred)
+
+Work Location: In person

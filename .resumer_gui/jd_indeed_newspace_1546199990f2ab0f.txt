@@ -1,0 +1,13 @@
+Job Summary
+We are looking for a Data Science Intern to assist with data analysis, visualization, and basic model development. The intern will work with real-world datasets and will get the opportunity to contribute to building next-generation autonomous communication and navigation systems.
+Key Responsibilities
+Data collection, cleaning, and preprocessing
+Exploratory data analysis and visualization
+Assist in building and validating basic ML/statistical models
+Support reporting and documentation
+Required Skills
+Python fundamentals
+Knowledge of Pandas, NumPy, and basic data visualization
+Understanding of statistics and machine learning basics
+Education
+Pursuing or recently completed a degree in Data Science, Computer Science, Statistics, or related field

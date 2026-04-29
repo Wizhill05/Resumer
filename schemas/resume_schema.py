@@ -7,6 +7,24 @@ The LLM fills these models; education & personal info come directly from truth.j
 from pydantic import BaseModel, Field
 
 
+class ResearchedJob(BaseModel):
+    """Structured output from the Job Researcher agent."""
+
+    job_description: str = Field(
+        description=(
+            "The full extracted job description including role summary, responsibilities, "
+            "required skills, and qualifications. Preserve all technical keywords exactly as written."
+        )
+    )
+    run_title: str = Field(
+        description=(
+            "A short human-readable title for this resume run in the format "
+            "'Company – Role Title', e.g. 'Google – Software Engineer' or "
+            "'Zepto – Backend Developer'. Use an en-dash (–) between company and role."
+        )
+    )
+
+
 class SkillCategory(BaseModel):
     """A group of related skills under a named category."""
 

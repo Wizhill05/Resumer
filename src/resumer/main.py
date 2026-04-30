@@ -125,23 +125,128 @@ def _extract_json_object(raw_text: str) -> str:
 
 def _infer_applying_for_from_jd(job_description: str) -> str | None:
     """Infer a role title from the job description when the model omits it."""
+    role_keywords = (
+        "engineer",
+        "developer",
+        "scientist",
+        "manager",
+        "analyst",
+        "architect",
+        "specialist",
+        "consultant",
+        "administrator",
+        "intern",
+        "designer",
+        "lead",
+    )
+    qualifier_words = {
+        "an",
+        "a",
+        "the",
+        "experienced",
+        "expert",
+        "skilled",
+        "talented",
+        "motivated",
+        "passionate",
+        "dynamic",
+        "dedicated",
+        "results-driven",
+    }
+    trailing_splitters = (
+        " to ",
+        " with ",
+        " who ",
+        " responsible for ",
+        " for ",
+        " in ",
+        " at ",
+    )
+
+    def _cleanup_candidate(candidate: str) -> str | None:
+        candidate = re.sub(r"\s+", " ", candidate).strip(" :;,.()-")
+        if not candidate:
+            return None
+
+        lowered = f" {candidate.lower()} "
+        for splitter in trailing_splitters:
+            if splitter in lowered:
+                cut_idx = lowered.index(splitter)
+                candidate = candidate[:cut_idx].strip(" :;,.()-")
+                break
+
+        tokens = candidate.split()
+        while tokens and tokens[0].lower() in qualifier_words:
+            tokens.pop(0)
+        if not tokens:
+            return None
+
+        candidate = " ".join(tokens)
+        lowered_words = [re.sub(r"[^a-z]", "", word.lower()) for word in tokens]
+        if not any(word in role_keywords for word in lowered_words):
+            return None
+
+        candidate = re.sub(r"\bback[\s-]*end\b", "Backend", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(
+            r"\bfront[\s-]*end\b", "Frontend", candidate, flags=re.IGNORECASE
+        )
+        candidate = re.sub(
+            r"\bfull[\s-]*stack\b", "Full Stack", candidate, flags=re.IGNORECASE
+        )
+        candidate = re.sub(r"\bdevops\b", "DevOps", candidate, flags=re.IGNORECASE)
+        candidate = candidate.title()
+        candidate = re.sub(r"\bDevops\b", "DevOps", candidate)
+        candidate = re.sub(r"\bApi\b", "API", candidate)
+        candidate = re.sub(r"\bAi\b", "AI", candidate)
+        candidate = re.sub(r"\bMl\b", "ML", candidate)
+        candidate = re.sub(r"\bQa\b", "QA", candidate)
+        candidate = re.sub(r"\bUi\b", "UI", candidate)
+        candidate = re.sub(r"\bUx\b", "UX", candidate)
+        candidate = re.sub(r"\bSql\b", "SQL", candidate)
+        return candidate.strip()
+
     lines = [line.strip() for line in job_description.splitlines() if line.strip()]
     if not lines:
         return None
 
-    first = lines[0]
-    # Prefer a concise title line like "Back End Developer".
-    if len(first.split()) <= 10 and "." not in first:
-        return first
+    candidates: list[str] = []
+    for line in lines:
+        if len(line.split()) <= 10 and "." not in line:
+            candidates.append(line)
 
-    lowered = job_description.lower()
-    match = re.search(r"looking for (?:an|a)?\s*([^\.,\n]+)", lowered)
-    if match:
-        role = match.group(1).strip(" :.-")
-        if role:
-            return " ".join(word.capitalize() for word in role.split())
+    extraction_patterns = (
+        r"\b(?:looking|searching|seeking)\s+for\s+(?:an?\s+)?([^\n\.,:;]+)",
+        r"\bjoin\s+our\s+\w+\s+as\s+(?:an?\s+)?([^\n\.,:;]+)",
+        r"\b(?:position|role)\s*(?:is|:)\s*(?:an?\s+)?([^\n\.,:;]+)",
+        r"\b(?:hiring|hire)\s+(?:an?\s+)?([^\n\.,:;]+)",
+    )
+    for pattern in extraction_patterns:
+        for match in re.finditer(pattern, job_description, flags=re.IGNORECASE):
+            candidates.append(match.group(1))
 
-    return None
+    cleaned_candidates = [c for c in (_cleanup_candidate(c) for c in candidates) if c]
+    if not cleaned_candidates:
+        return None
+
+    return sorted(cleaned_candidates, key=lambda role: (len(role.split()), len(role)))[0]
+
+
+def _strip_markdown_artifacts(text: str) -> str:
+    """
+    Convert markdown-ish inline formatting to plain text for fields that should
+    render as normal prose (e.g., project descriptions).
+    """
+    # Links: [text](url) -> text
+    cleaned = re.sub(r"\[([^\]]+)\]\((?:[^)]+)\)", r"\1", text)
+    # Inline code: `text` -> text
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    # Bold/italic markers
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = cleaned.replace("*", "").replace("_", "")
+    # Flatten accidental list markers into plain prose
+    cleaned = re.sub(r"(?m)^\s*[-•]\s+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -209,6 +314,9 @@ def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 and not link.startswith(("http://", "https://"))
             ):
                 p["link"] = f"https://{link}"
+            description = p.get("description")
+            if isinstance(description, str) and description.strip():
+                p["description"] = _strip_markdown_artifacts(description)
             normalized_projects.append(p)
         payload["projects"] = normalized_projects or None
 

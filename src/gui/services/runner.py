@@ -65,6 +65,8 @@ class PipelineStatus:
     iteration: str = "-"
     output_dir: str = "-"
     final_pdf: str = "-"
+    project_id: str = "-"
+    project_name: str = "-"
     run_started_at: float | None = None
     run_finished_at: float | None = None
     exit_code: int | None = None
@@ -101,6 +103,8 @@ class ResumeRunController:
         model: str,
         api_key_env: str,
         omissions: dict[str, bool],
+        project_id: str = "",
+        project_name: str = "",
     ) -> None:
         if self.is_running():
             raise RuntimeError("A run is already in progress")
@@ -111,6 +115,8 @@ class ResumeRunController:
         self.status = PipelineStatus(
             state="starting",
             model=model,
+            project_id=project_id or "-",
+            project_name=project_name or "-",
             run_started_at=time.time(),
         )
 

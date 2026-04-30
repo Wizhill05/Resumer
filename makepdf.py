@@ -73,6 +73,86 @@ def _md_inline(text: str) -> str:
     return html
 
 
+def _looks_like_windows_abs_path(value: str) -> bool:
+    return bool(re.match(r"^[a-zA-Z]:[\\/]", value))
+
+
+def _is_external_or_builtin_url(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(
+        (
+            "http://",
+            "https://",
+            "data:",
+            "blob:",
+            "about:",
+            "javascript:",
+            "file://",
+        )
+    )
+
+
+def _resolve_local_asset_ref(value: str, base_dirs: list[Path]) -> str:
+    """
+    Resolve local paths (Windows absolute, workspace-relative, css-relative) to file:// URLs.
+    Keeps external URLs unchanged.
+    """
+    raw = value.strip().strip("\"'")
+    if not raw:
+        return value
+    if _is_external_or_builtin_url(raw):
+        return raw
+
+    candidates: list[Path] = []
+    if _looks_like_windows_abs_path(raw) or raw.startswith("\\\\"):
+        candidates.append(Path(raw))
+    else:
+        rel = Path(raw)
+        for base in base_dirs:
+            candidates.append(base / rel)
+        # Also allow paths relative to current working directory.
+        candidates.append(Path.cwd() / rel)
+
+    for candidate in candidates:
+        try:
+            p = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        if p.exists():
+            try:
+                return p.as_uri()
+            except Exception:
+                continue
+
+    return raw
+
+
+def _rewrite_css_asset_urls(css_text: str, css_dir: Path) -> str:
+    pattern = re.compile(r"url\(\s*(['\"]?)(.*?)\1\s*\)", flags=re.IGNORECASE)
+
+    def repl(match: re.Match[str]) -> str:
+        quote = match.group(1) or ""
+        ref = match.group(2) or ""
+        resolved = _resolve_local_asset_ref(ref, [css_dir])
+        return f"url({quote}{resolved}{quote})"
+
+    return pattern.sub(repl, css_text)
+
+
+def _rewrite_html_img_src(html_text: str, base_dirs: list[Path]) -> str:
+    pattern = re.compile(
+        r'(<img\b[^>]*?\bsrc\s*=\s*)(["\'])([^"\']+)(\2)',
+        flags=re.IGNORECASE,
+    )
+
+    def repl(match: re.Match[str]) -> str:
+        prefix, quote, src_value, suffix_quote = match.groups()
+        resolved = _resolve_local_asset_ref(src_value, base_dirs)
+        return f"{prefix}{quote}{resolved}{suffix_quote}"
+
+    return pattern.sub(repl, html_text)
+
+
 def _preprocess_tilde(body: str) -> str:
     """
     Convert the '~ right-text' row syntax into definition-list HTML so the
@@ -130,6 +210,7 @@ def _build_html(md_path: Path, css_path: Path) -> str:
     # 4. Load & adapt CSS
     raw_css = css_path.read_text(encoding="utf-8")
     page_css = _adapt_css(raw_css)
+    page_css = _rewrite_css_asset_urls(page_css, css_path.parent)
 
     # 5. Print-friendly base styles
     base_css = textwrap.dedent("""
@@ -173,7 +254,7 @@ def _build_html(md_path: Path, css_path: Path) -> str:
     """)
 
     # 6. Assemble full HTML document
-    return textwrap.dedent(f"""
+    html = textwrap.dedent(f"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -194,6 +275,9 @@ def _build_html(md_path: Path, css_path: Path) -> str:
         </body>
         </html>
     """).strip()
+
+    # Resolve local image paths (e.g., Windows paths in truth.json photo.link).
+    return _rewrite_html_img_src(html, [md_path.parent, css_path.parent])
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +306,7 @@ def generate_pdf(
     -------
     Tuple of (Path to the generated PDF file, content height in pixels).
     """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright  # lazy import
 
     md_path = Path(md_path)
@@ -234,21 +319,60 @@ def generate_pdf(
         browser = p.chromium.launch()
         page = browser.new_page()
 
-        # Load HTML; use a file base-URL so relative assets (images etc.) resolve
-        page.set_content(html, wait_until="networkidle")
+        # Use DOM readiness instead of networkidle. The template references
+        # external font/icon CDNs, and waiting for full network idle can hang.
+        page.set_content(html, wait_until="domcontentloaded")
 
         # Wait for Iconify to replace all iconify spans with rendered SVGs.
         # Iconify sets a 'data-loaded' attribute on the root script tag when done,
         # and replaces .iconify spans with <svg> elements.
-        page.wait_for_function(
-            """() => {
-                const spans = document.querySelectorAll('.iconify');
-                if (spans.length === 0) return true;          // no icons to render
-                const svgs  = document.querySelectorAll('svg.iconify');
-                return svgs.length >= spans.length;           // all replaced
-            }""",
-            timeout=10_000,
-        )
+        try:
+            page.wait_for_function(
+                """() => {
+                    const spans = document.querySelectorAll('.iconify');
+                    if (spans.length === 0) return true;          // no icons to render
+                    const svgs  = document.querySelectorAll('svg.iconify');
+                    return svgs.length >= spans.length;           // all replaced
+                }""",
+                timeout=10_000,
+            )
+        except PlaywrightTimeoutError:
+            print("⚠️  Iconify CDN not ready in time; continuing without icon wait.")
+
+        # Wait until images are fully loaded (prevents partially painted photos)
+        # and let web fonts settle before PDF capture.
+        try:
+            page.wait_for_function(
+                """() => {
+                    const imgs = Array.from(document.images || []);
+                    return imgs.every((img) => img.complete);
+                }""",
+                timeout=15_000,
+            )
+        except PlaywrightTimeoutError:
+            print("⚠️  Some images did not finish loading in time; continuing.")
+
+        try:
+            page.evaluate(
+                """async () => {
+                    if (document.fonts && document.fonts.ready) {
+                        try { await document.fonts.ready; } catch (_) {}
+                    }
+                    const imgs = Array.from(document.images || []);
+                    await Promise.all(
+                        imgs.map(async (img) => {
+                            if (!img.complete) return;
+                            if (typeof img.decode === "function") {
+                                try { await img.decode(); } catch (_) {}
+                            }
+                        })
+                    );
+                }"""
+            )
+        except Exception:
+            pass
+
+        page.wait_for_timeout(200)
 
         # Measure the content height before generating the PDF
         content_height = page.evaluate("() => document.body.scrollHeight")

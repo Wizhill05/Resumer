@@ -1,2 +1,2 @@
-Back End Developer
+something
 We are looking for an experienced Back End Developer to join our dynamic team. The ideal candidate will be responsible for designing, developing, and maintaining robust server-side applications. You will work closely with front-end developers and product managers to create seamless user experiences. Strong proficiency in Python, Django, and database management is required. Experience with cloud platforms and API development is a plus.

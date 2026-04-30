@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import functools
 import html
+import json
+import shutil
 import socket
 import sys
 import threading
 import time
+import difflib
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
 
 import streamlit as st
+from dotenv import load_dotenv
+try:
+    from streamlit_ace import st_ace
+except Exception:  # pragma: no cover - graceful fallback
+    st_ace = None
 
 APP_DIR = Path(__file__).resolve().parent
 SRC_DIR = APP_DIR.parent
@@ -21,16 +29,20 @@ for _p in (WORKSPACE_ROOT, SRC_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from gui.services.local_backend import (  # noqa: E402
+    AuthUser,
+    LocalBackend,
+)
 from gui.services.runner import LogEntry, ResumeRunController  # noqa: E402
 
-
-OUTPUTS_ROOT = WORKSPACE_ROOT / "outputs"
+load_dotenv(WORKSPACE_ROOT / ".env.local", override=False)
 
 MODEL_PRESETS: dict[str, tuple[str, str]] = {
     "Mistral Large (stable)": ("mistral/mistral-large-latest", "MISTRAL_API_KEY"),
     "Mistral Medium": ("mistral/mistral-medium-latest", "MISTRAL_API_KEY"),
     "Gemini 3 Flash": ("gemini/gemini-3-flash-preview", "GEMINI_KEY"),
-    "Gemini 3.1 Flash lite": ("gemini/gemini-3.1-flash-preview", "GEMINI_KEY"),
+    "Gemini 3.1 Flash lite": ("gemini/gemini-3.1-flash-lite-preview", "GEMINI_KEY"),
+    "Gemma 4 31B": ("gemini/gemma-4-31b-it", "GEMINI_KEY"),
     "OpenRouter Mistral Large": (
         "openrouter/mistralai/mistral-large-latest",
         "OPENROUTER_API_KEY",
@@ -108,6 +120,44 @@ def _ensure_controller() -> ResumeRunController:
     return st.session_state.runner
 
 
+def _ensure_local_backend() -> tuple[LocalBackend | None, str]:
+    cached = st.session_state.get("local_backend")
+    if isinstance(cached, LocalBackend):
+        return cached, ""
+
+    try:
+        backend = LocalBackend()
+    except Exception as exc:
+        return None, f"Failed to initialize local backend: {exc}"
+
+    st.session_state["local_backend"] = backend
+    return backend, ""
+
+
+def _set_auth_user(user: AuthUser) -> None:
+    st.session_state["auth_user"] = {
+        "uid": user.uid,
+        "email": user.email,
+        "id_token": user.id_token,
+        "refresh_token": user.refresh_token,
+    }
+
+
+def _clear_auth_user() -> None:
+    st.session_state.pop("auth_user", None)
+
+
+def _get_auth_user() -> dict[str, str] | None:
+    raw = st.session_state.get("auth_user")
+    if not isinstance(raw, dict):
+        return None
+    uid = str(raw.get("uid", "")).strip()
+    email = str(raw.get("email", "")).strip()
+    if not uid or not email:
+        return None
+    return raw
+
+
 def _inject_figma_css() -> None:
     st.markdown(
         """
@@ -127,7 +177,6 @@ def _inject_figma_css() -> None:
             --red: #e35a67;
         }
 
-        /* ─── Global ─── */
         .stApp {
             font-family: 'Manrope', sans-serif;
             color: var(--text);
@@ -153,7 +202,6 @@ def _inject_figma_css() -> None:
             gap: 0.85rem !important;
         }
 
-        /* ─── st.container(border=True) card styling ─── */
         [data-testid="stVerticalBlockBorderWrapper"] {
             background: linear-gradient(180deg, rgba(16, 18, 24, 0.98), rgba(10, 12, 16, 0.98)) !important;
             border: 1px solid var(--line) !important;
@@ -167,7 +215,6 @@ def _inject_figma_css() -> None:
             padding: 1.1rem 1.25rem 0.9rem !important;
         }
 
-        /* ─── Card Headers (raw HTML) ─── */
         .card-header {
             display: flex;
             justify-content: space-between;
@@ -202,12 +249,12 @@ def _inject_figma_css() -> None:
             color: #e0e2e8;
         }
 
-        .meta-sub {
+        .mono-note {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.78rem;
             color: var(--muted);
         }
 
-        /* ─── Signal Bars ─── */
         .signal {
             display: inline-flex;
             gap: 5px;
@@ -227,7 +274,6 @@ def _inject_figma_css() -> None:
         .signal .warn { background: var(--yellow); }
         .signal .bad  { background: var(--red); }
 
-        /* ─── Resume Preview ─── */
         .preview-shell {
             border: 1px solid var(--line);
             border-radius: 8px;
@@ -250,20 +296,6 @@ def _inject_figma_css() -> None:
             text-decoration: underline;
         }
 
-        /* ─── Controls ─── */
-        .controls-note {
-            color: var(--muted);
-            font-size: 0.82rem;
-            margin-bottom: 0.3rem;
-        }
-
-        .mono-note {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
-            color: var(--muted);
-        }
-
-        /* ─── Streamlit widget overrides ─── */
         .stTextInput > label,
         .stSelectbox > label,
         .stSlider > label,
@@ -288,10 +320,6 @@ def _inject_figma_css() -> None:
             border-radius: 8px !important;
         }
 
-        .stSlider [data-baseweb="slider"] {
-            background: transparent !important;
-        }
-
         .stButton > button,
         .stDownloadButton > button,
         .stFormSubmitButton > button {
@@ -313,22 +341,8 @@ def _inject_figma_css() -> None:
             box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
         }
 
-        /* For the iframe in the logs panel — remove Streamlit's padding */
         iframe {
             border-radius: 8px !important;
-        }
-
-        /* ─── Expander styling ─── */
-        details summary {
-            font-family: 'Manrope', sans-serif !important;
-            font-weight: 600 !important;
-            color: var(--muted) !important;
-        }
-
-        /* Remove extra top-margin from the form inside controls card */
-        [data-testid="stForm"] {
-            border: none !important;
-            padding: 0 !important;
         }
         </style>
         """,
@@ -366,33 +380,6 @@ def _signal_markup(state: str) -> str:
     if state in {"stopping", "stopped"}:
         return "<span class='warn'></span><span></span><span></span>"
     return "<span></span><span></span><span></span>"
-
-
-def _list_output_folders() -> list[Path]:
-    if not OUTPUTS_ROOT.exists():
-        return []
-    folders = [path for path in OUTPUTS_ROOT.iterdir() if path.is_dir()]
-    folders.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    return folders
-
-
-def _list_folder_artifacts(folder: Path) -> list[Path]:
-    artifacts = [
-        path
-        for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in {".pdf", ".md"}
-    ]
-    artifacts.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    return artifacts
-
-
-def _default_artifact_name(artifacts: list[Path]) -> str:
-    preferred = ["final_resume.pdf", "final_resume.md", "draft_v2.md", "draft_v1.md"]
-    by_name = {item.name: item for item in artifacts}
-    for name in preferred:
-        if name in by_name:
-            return name
-    return artifacts[0].name
 
 
 def _build_logs_html(logs: list[LogEntry]) -> str:
@@ -515,97 +502,316 @@ def _build_logs_html(logs: list[LogEntry]) -> str:
 """
 
 
-# ────────────────────────────────────────────────
-# Panel renderers
-# ────────────────────────────────────────────────
+def _profile_temp_path(uid: str) -> Path:
+    target_dir = WORKSPACE_ROOT / ".resumer_gui" / uid
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir / "truth.runtime.json"
 
 
-def _render_resume_panel(controller: ResumeRunController) -> None:
-    """Left column: Resumer title + resume name selector + PDF preview."""
+def _resolve_workspace_path(raw_path: str) -> Path:
+    p = Path(raw_path).expanduser()
+    if not p.is_absolute():
+        p = WORKSPACE_ROOT / p
+    return p.resolve()
 
-    folders = _list_output_folders()
 
-    with st.container(border=True):
-        if not folders:
-            st.markdown(
-                "<div class='card-header'>"
-                "<div class='card-title'>Resumer</div>"
-                "<div class='card-header-right'><span class='meta-label'>Resume Name</span></div>"
-                "</div>",
-                unsafe_allow_html=True,
+def _json_error_context(raw_text: str, exc: json.JSONDecodeError) -> str:
+    lines = raw_text.splitlines()
+    line_index = max(exc.lineno - 1, 0)
+    line = lines[line_index] if line_index < len(lines) else ""
+    caret = " " * max(exc.colno - 1, 0) + "^"
+    return f"{line}\n{caret}"
+
+
+def _truth_structure_warnings(payload: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    required_top = [
+        "personal_information",
+        "education",
+        "skills",
+        "projects",
+        "experience",
+    ]
+    for key in required_top:
+        if key not in payload:
+            warnings.append(f"Missing top-level key: '{key}'.")
+
+    personal = payload.get("personal_information")
+    if not isinstance(personal, dict):
+        warnings.append("'personal_information' should be an object.")
+    else:
+        required_personal = ["name", "phone", "email", "linkedin", "github", "location"]
+        for key in required_personal:
+            value = personal.get(key)
+            if not isinstance(value, str) or not value.strip():
+                warnings.append(f"'personal_information.{key}' should be a non-empty string.")
+
+    photo = payload.get("photo")
+    if photo is not None:
+        if not isinstance(photo, dict):
+            warnings.append("'photo' should be an object with a 'link' field.")
+        else:
+            link = photo.get("link")
+            if link is not None and not isinstance(link, str):
+                warnings.append("'photo.link' should be a string.")
+
+    for key in ("education", "projects", "experience"):
+        value = payload.get(key)
+        if value is not None and not isinstance(value, list):
+            warnings.append(f"'{key}' should be an array.")
+
+    skills = payload.get("skills")
+    if skills is not None and not isinstance(skills, dict):
+        warnings.append("'skills' should be an object of skill categories.")
+
+    return warnings
+
+
+def _json_path_lookup(payload: Any, raw_path: str) -> Any:
+    path = raw_path.strip()
+    if not path:
+        raise ValueError("Enter a JSON path.")
+
+    tokens: list[str | int] = []
+    i = 0
+    while i < len(path):
+        ch = path[i]
+        if ch == ".":
+            i += 1
+            continue
+        if ch == "[":
+            close_idx = path.find("]", i + 1)
+            if close_idx == -1:
+                raise ValueError("Unclosed '[' in JSON path.")
+            idx_text = path[i + 1 : close_idx].strip()
+            if not idx_text.isdigit():
+                raise ValueError("Array index must be a non-negative integer.")
+            tokens.append(int(idx_text))
+            i = close_idx + 1
+            continue
+
+        start = i
+        while i < len(path) and path[i] not in ".[":
+            i += 1
+        key = path[start:i].strip()
+        if not key:
+            raise ValueError("Invalid JSON path segment.")
+        tokens.append(key)
+
+    current = payload
+    for token in tokens:
+        if isinstance(token, int):
+            if not isinstance(current, list):
+                raise ValueError(f"Expected array before index [{token}].")
+            if token < 0 or token >= len(current):
+                raise ValueError(f"Index [{token}] out of range.")
+            current = current[token]
+        else:
+            if not isinstance(current, dict):
+                raise ValueError(f"Expected object before key '{token}'.")
+            if token not in current:
+                raise ValueError(f"Key '{token}' not found.")
+            current = current[token]
+    return current
+
+
+def _project_display_label(project: dict[str, object]) -> str:
+    name = str(project.get("name", "Untitled"))
+    status = str(project.get("status", "unknown")).upper()
+    created_at = project.get("created_at")
+    created_str = "—"
+    if isinstance(created_at, datetime):
+        created_str = created_at.strftime("%Y-%m-%d %H:%M")
+    return f"{name} [{status}] · {created_str}"
+
+
+def _artifact_display_name(artifact: dict[str, object]) -> str:
+    file_name = str(artifact.get("file_name", "")).strip()
+    if file_name:
+        return file_name
+    storage_path = str(artifact.get("storage_path", "")).strip()
+    return Path(storage_path).name or "artifact"
+
+
+def _default_artifact_name(artifacts: list[dict[str, object]]) -> str:
+    preferred = ["final_resume.pdf", "final_resume.md", "draft_v2.md", "draft_v1.md"]
+    by_name = {_artifact_display_name(a): a for a in artifacts}
+    for name in preferred:
+        if name in by_name:
+            return name
+    return _artifact_display_name(artifacts[0])
+
+
+def _sync_finished_run_artifacts(
+    controller: ResumeRunController, backend: LocalBackend, uid: str
+) -> None:
+    status = controller.status
+    project_id = status.project_id.strip()
+    if not project_id or project_id == "-":
+        return
+    if status.state not in {"completed", "failed", "stopped"}:
+        return
+
+    sync_state = st.session_state.setdefault("synced_run_states", {})
+    sync_key = f"{status.state}|{status.output_dir}|{status.exit_code}"
+    if sync_state.get(project_id) == sync_key:
+        return
+
+    output_dir_text = status.output_dir.strip()
+    output_dir: Path | None = None
+    if output_dir_text and output_dir_text != "-":
+        output_dir = Path(output_dir_text)
+
+    try:
+        if output_dir and output_dir.exists():
+            backend.replace_project_artifacts_from_local(
+                uid=uid, project_id=project_id, output_dir=output_dir
             )
-            st.info("No artifacts yet. Launch a run to generate resume previews.")
+            shutil.rmtree(output_dir, ignore_errors=True)
+        if status.state == "completed":
+            backend.update_project_status(
+                uid=uid, project_id=project_id, status="completed"
+            )
+        else:
+            backend.update_project_status(
+                uid=uid,
+                project_id=project_id,
+                status="failed",
+                error_message=f"Run ended with status '{status.state}' (exit code: {status.exit_code}).",
+            )
+        sync_state[project_id] = sync_key
+    except Exception as exc:
+        st.session_state["last_sync_error"] = str(exc)
+
+
+def _render_auth_panel(backend: LocalBackend) -> None:
+    user = _get_auth_user()
+    with st.container(border=True):
+        if user:
+            left, right = st.columns([4, 1])
+            with left:
+                st.markdown(
+                    (
+                        "<div class='card-header'>"
+                        "<div class='card-title'>Resumer</div>"
+                        f"<div class='card-header-right'>Active Profile: {html.escape(user['email'])}</div>"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with right:
+                if st.button("Switch", use_container_width=True):
+                    _clear_auth_user()
+                    st.rerun()
             return
 
-        folder_labels = [folder.name for folder in folders]
-        active_folder_name = ""
-        if controller.status.output_dir not in {"", "-"}:
-            active_folder_name = Path(controller.status.output_dir).name
-
-        folder_index = (
-            folder_labels.index(active_folder_name)
-            if active_folder_name in folder_labels
-            else 0
+        st.markdown(
+            "<div class='card-title' style='margin-bottom:0.75rem;'>Choose Local Profile</div>",
+            unsafe_allow_html=True,
         )
 
-        selected_folder_path = OUTPUTS_ROOT / folder_labels[folder_index]
-        artifacts = _list_folder_artifacts(selected_folder_path)
-
-        if not artifacts:
-            st.markdown(
-                "<div class='card-header'><div class='card-title'>Resumer</div></div>",
-                unsafe_allow_html=True,
+        users = backend.list_users()
+        if users:
+            user_ids = [str(item["id"]) for item in users]
+            selected_user_id = st.selectbox(
+                "Existing Profiles",
+                options=user_ids,
+                format_func=lambda user_id: next(
+                    (
+                        str(item.get("display_name", "Profile"))
+                        for item in users
+                        if str(item.get("id", "")) == user_id
+                    ),
+                    user_id,
+                ),
+                key="local_profile_selector",
             )
-            st.warning("This run folder has no previewable artifacts.")
+            if st.button("Use Selected Profile", use_container_width=True):
+                try:
+                    user_obj = backend.use_user(selected_user_id)
+                    _set_auth_user(user_obj)
+                    backend.get_truth_json(user_obj.uid)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not switch profile: {exc}")
+
+        st.markdown("---")
+        new_profile_name = st.text_input(
+            "Create new profile",
+            value="",
+            placeholder="e.g. John Local",
+            key="create_local_profile_name",
+        )
+        if st.button("Create Profile", use_container_width=True):
+            try:
+                fallback_name = f"Profile {len(users) + 1}"
+                profile_name = new_profile_name.strip() or fallback_name
+                user_obj = backend.create_user(profile_name)
+                _set_auth_user(user_obj)
+                backend.get_truth_json(user_obj.uid)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not create profile: {exc}")
+
+
+def _render_resume_panel(
+    controller: ResumeRunController, backend: LocalBackend, uid: str
+) -> None:
+    projects = backend.list_projects(uid)
+    with st.container(border=True):
+        st.markdown("<div class='card-title'>Projects</div>", unsafe_allow_html=True)
+        if not projects:
+            st.info(
+                "No projects yet. Run the pipeline to create your first local project."
+            )
             return
 
-        artifact_names = [item.name for item in artifacts]
-        default_artifact = _default_artifact_name(artifacts)
-        default_index = artifact_names.index(default_artifact)
+        project_ids = [str(p.get("id", "")) for p in projects]
+        project_map = {str(p.get("id", "")): p for p in projects}
+        selected_project_id = st.session_state.get("selected_project_id")
+        if selected_project_id not in project_map:
+            selected_project_id = project_ids[0]
+        selected_project_id = st.selectbox(
+            "Project",
+            options=project_ids,
+            index=project_ids.index(selected_project_id),
+            format_func=lambda pid: _project_display_label(project_map[pid]),
+            key="project_selector",
+        )
+        st.session_state["selected_project_id"] = selected_project_id
+        selected_project = project_map[selected_project_id]
+        st.caption(f"Status: {selected_project.get('status', 'unknown')}")
 
-        # Title
-        st.markdown("<div class='card-title'>Resumer</div>", unsafe_allow_html=True)
-
-        # Run folder and artifact file selectors side by side
-        sel_left, sel_right = st.columns(2)
-        with sel_left:
-            selected_folder = st.selectbox(
-                "Run Folder",
-                options=folder_labels,
-                index=folder_index,
-                key="resume_folder_selector",
-            )
-        with sel_right:
+        artifacts = backend.list_artifacts(uid=uid, project_id=selected_project_id)
+        if not artifacts:
+            st.warning("No artifacts uploaded yet for this project.")
+        else:
+            artifact_names = [_artifact_display_name(a) for a in artifacts]
+            default_name = _default_artifact_name(artifacts)
+            artifact_map = {name: a for name, a in zip(artifact_names, artifacts)}
             selected_artifact_name = st.selectbox(
                 "Resume File",
                 options=artifact_names,
-                index=default_index,
-                key=f"resume_artifact_{folder_labels[folder_index]}",
+                index=artifact_names.index(default_name)
+                if default_name in artifact_names
+                else 0,
+                key=f"artifact_selector_{selected_project_id}",
             )
+            selected_artifact = artifact_map[selected_artifact_name]
+            storage_path = str(selected_artifact.get("storage_path", "")).strip()
+            mime_type = str(selected_artifact.get("mime_type", "")).strip().lower()
+            payload = backend.download_bytes(storage_path)
 
-        # Re-resolve after user might change folder
-        selected_folder_path = OUTPUTS_ROOT / selected_folder
-        artifacts = _list_folder_artifacts(selected_folder_path)
-        if not artifacts:
-            st.warning("No previewable artifacts in this folder.")
-            return
-
-        artifact_names_refreshed = [item.name for item in artifacts]
-        if selected_artifact_name not in artifact_names_refreshed:
-            selected_artifact_name = _default_artifact_name(artifacts)
-
-        selected_artifact_path = next(
-            (item for item in artifacts if item.name == selected_artifact_name),
-            artifacts[0],
-        )
-
-        with selected_artifact_path.open("rb") as file:
-            payload = file.read()
-
-        if selected_artifact_path.suffix.lower() == ".pdf":
-            pdf_url = _local_file_url(selected_artifact_path)
-            if pdf_url:
-                safe_url = html.escape(pdf_url)
+            if mime_type == "application/pdf":
+                signed_url = backend.signed_url(storage_path, ttl_minutes=60)
+                preview_url = signed_url
+                if not signed_url.startswith(("http://", "https://", "file://")):
+                    local_url = _local_file_url(Path(signed_url))
+                    if local_url:
+                        preview_url = local_url
+                    else:
+                        preview_url = Path(signed_url).as_uri()
+                safe_url = html.escape(preview_url)
                 st.markdown(
                     f"""
                     <div class='preview-shell'>
@@ -622,25 +828,48 @@ def _render_resume_panel(controller: ResumeRunController) -> None:
                     unsafe_allow_html=True,
                 )
             else:
-                st.warning("Preview server unavailable. Use download to open the file.")
-        else:
-            text = payload.decode("utf-8", errors="replace")
-            st.code(text, language="markdown")
+                text = payload.decode("utf-8", errors="replace")
+                st.code(text, language="markdown")
 
-        st.download_button(
-            "⬇  Download",
-            data=payload,
-            file_name=selected_artifact_path.name,
-            mime="application/pdf"
-            if selected_artifact_path.suffix.lower() == ".pdf"
-            else "text/markdown",
-            use_container_width=True,
-            key=f"download_{selected_folder}_{selected_artifact_path.name}",
+            st.download_button(
+                "⬇  Download",
+                data=payload,
+                file_name=selected_artifact_name,
+                mime=mime_type or "application/octet-stream",
+                use_container_width=True,
+                key=f"download_{selected_project_id}_{selected_artifact_name}",
+            )
+
+        st.markdown("---")
+        delete_disabled = (
+            controller.is_running()
+            and controller.status.project_id == selected_project_id
         )
+        confirm = st.checkbox(
+            "Confirm delete selected project",
+            key=f"confirm_delete_{selected_project_id}",
+        )
+        if st.button(
+            "🗑 Delete Project",
+            use_container_width=True,
+            disabled=delete_disabled,
+            key=f"delete_project_{selected_project_id}",
+        ):
+            if not confirm:
+                st.warning("Enable confirmation checkbox to delete this project.")
+            else:
+                try:
+                    backend.delete_project(uid=uid, project_id=selected_project_id)
+                    synced = st.session_state.setdefault("synced_run_states", {})
+                    if isinstance(synced, dict):
+                        synced.pop(selected_project_id, None)
+                    st.session_state.pop("selected_project_id", None)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Delete failed: {exc}")
 
 
 def _render_logs_panel(controller: ResumeRunController) -> None:
-    """Top-right: Logs panel with terminal-style log viewer."""
     status = controller.status
     agent = status.active_agent if status.active_agent not in {"", "-"} else "Idle"
     signal = _signal_markup(status.state)
@@ -669,9 +898,9 @@ def _render_logs_panel(controller: ResumeRunController) -> None:
             st.warning("Could not render logs panel. Local preview server unavailable.")
 
 
-def _render_controls_panel(controller: ResumeRunController) -> None:
-    """Bottom-right: Run Controls panel."""
-
+def _render_controls_panel(
+    controller: ResumeRunController, backend: LocalBackend, uid: str
+) -> None:
     if "run_name_input" not in st.session_state:
         st.session_state.run_name_input = (
             f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -689,16 +918,9 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
             left, right = st.columns([1.55, 1])
 
             with left:
-                # All text / select inputs stacked cleanly
-                st.text_input(
-                    "Run Name",
-                    key="run_name_input",
-                )
+                st.text_input("Run Name", key="run_name_input")
                 jd_path = st.text_input(
                     "Job Description File Path", value="input/job_description.txt"
-                )
-                data_path = st.text_input(
-                    "Master Profile Path", value="input/truth.json"
                 )
                 preset = st.selectbox("Model Selection", options=preset_names, index=0)
 
@@ -711,7 +933,6 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                     f"Status: {_status_badge(controller.status.state)}</div>",
                     unsafe_allow_html=True,
                 )
-                # Buttons in the right column, stacked
                 start_run = st.form_submit_button(
                     "▶  Run Pipeline",
                     disabled=controller.is_running(),
@@ -767,20 +988,328 @@ def _render_controls_panel(controller: ResumeRunController) -> None:
                 "no_applying_for": no_applying_for,
                 "no_photo": no_photo,
             }
-
             try:
-                controller.start_run(
-                    jd_path=jd_path.strip(),
-                    data_path=data_path.strip(),
-                    max_iterations=max_iterations,
-                    job_label=st.session_state.run_name_input.strip() or "run_manual",
-                    model=final_model,
-                    api_key_env=final_key_env,
-                    omissions=omissions,
+                resolved_jd = _resolve_workspace_path(jd_path.strip())
+                if not resolved_jd.exists():
+                    raise FileNotFoundError(f"JD file not found: {resolved_jd}")
+                jd_text = resolved_jd.read_text(encoding="utf-8").strip()
+                truth_json = backend.get_truth_json(uid)
+                profile_path = _profile_temp_path(uid)
+                profile_path.write_text(
+                    json.dumps(truth_json, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
                 )
+
+                run_name = st.session_state.run_name_input.strip() or "run_manual"
+                project_id = backend.create_project(
+                    uid=uid,
+                    name=run_name,
+                    job_description=jd_text,
+                )
+                local_run_label = f"{run_name}_{project_id[:8]}"
+                try:
+                    controller.start_run(
+                        jd_path=str(resolved_jd),
+                        data_path=str(profile_path),
+                        max_iterations=max_iterations,
+                        job_label=local_run_label,
+                        model=final_model,
+                        api_key_env=final_key_env,
+                        omissions=omissions,
+                        project_id=project_id,
+                        project_name=run_name,
+                    )
+                except Exception as exc:
+                    backend.update_project_status(
+                        uid=uid,
+                        project_id=project_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    raise
+                st.session_state["selected_project_id"] = project_id
                 st.rerun()
             except Exception as exc:
                 st.error(f"Could not start run: {exc}")
+
+def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
+    editor_key = f"profile_editor_{uid}"
+    editor_buffer_key = f"profile_editor_buffer_{uid}"
+    saved_snapshot_key = f"profile_editor_saved_snapshot_{uid}"
+    ace_version_key = f"profile_editor_ace_version_{uid}"
+    save_confirm_key = f"profile_editor_confirm_save_{uid}"
+    loaded_flag_key = f"profile_editor_loaded_{uid}"
+
+    if ace_version_key not in st.session_state:
+        st.session_state[ace_version_key] = 0
+
+    def _set_editor_content(new_text: str, *, mark_saved: bool = False) -> None:
+        st.session_state[editor_buffer_key] = new_text
+        st.session_state[editor_key] = new_text
+        st.session_state[ace_version_key] = int(st.session_state.get(ace_version_key, 0)) + 1
+        if mark_saved:
+            st.session_state[saved_snapshot_key] = new_text
+            st.session_state[save_confirm_key] = False
+
+    with st.container(border=True):
+        st.markdown(
+            "<div class='card-title'>Master Profile (truth.json)</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Edit your full master profile here. This is saved per local profile in SQLite."
+        )
+
+        action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
+        with action_col1:
+            refresh_clicked = st.button(
+                "Reload from Local DB", key=f"refresh_profile_{uid}", use_container_width=True
+            )
+        with action_col2:
+            load_sample_clicked = st.button(
+                "Load sample template", key=f"load_sample_profile_{uid}", use_container_width=True
+            )
+        with action_col3:
+            format_clicked = st.button(
+                "Format JSON", key=f"format_profile_json_{uid}", use_container_width=True
+            )
+        with action_col4:
+            minify_clicked = st.button(
+                "Minify JSON", key=f"minify_profile_json_{uid}", use_container_width=True
+            )
+        with action_col5:
+            validate_clicked = st.button(
+                "Validate JSON", key=f"validate_profile_json_{uid}", use_container_width=True
+            )
+
+        if refresh_clicked or not st.session_state.get(loaded_flag_key, False):
+            current = backend.get_truth_json(uid)
+            editor_text = json.dumps(current, indent=2, ensure_ascii=False)
+            _set_editor_content(editor_text, mark_saved=True)
+            st.session_state[loaded_flag_key] = True
+
+        if load_sample_clicked:
+            sample = backend.sample_truth_json()
+            _set_editor_content(
+                json.dumps(sample, indent=2, ensure_ascii=False)
+            )
+            st.session_state[loaded_flag_key] = True
+
+        if editor_buffer_key not in st.session_state:
+            current = backend.get_truth_json(uid)
+            editor_text = json.dumps(current, indent=2, ensure_ascii=False)
+            st.session_state[editor_buffer_key] = editor_text
+            st.session_state[editor_key] = editor_text
+            st.session_state[saved_snapshot_key] = editor_text
+
+        buffer_text = str(st.session_state.get(editor_buffer_key, "{}"))
+
+        if format_clicked:
+            try:
+                parsed = json.loads(buffer_text)
+                _set_editor_content(
+                    json.dumps(parsed, indent=2, ensure_ascii=False)
+                )
+                buffer_text = str(st.session_state.get(editor_buffer_key, "{}"))
+            except Exception as exc:
+                st.error(f"Format failed: {exc}")
+
+        if minify_clicked:
+            try:
+                parsed = json.loads(buffer_text)
+                _set_editor_content(
+                    json.dumps(parsed, separators=(",", ":"), ensure_ascii=False)
+                )
+                buffer_text = str(st.session_state.get(editor_buffer_key, "{}"))
+            except Exception as exc:
+                st.error(f"Minify failed: {exc}")
+
+        workspace_col, side_col = st.columns([2.2, 1], gap="medium")
+
+        with workspace_col:
+            if st_ace is not None:
+                st.caption("Editor: Ace (syntax highlighting, line numbers, Ctrl/Cmd+F search)")
+                ace_key = f"profile_ace_{uid}_{st.session_state.get(ace_version_key, 0)}"
+                ace_value = st_ace(
+                    value=buffer_text,
+                    language="json",
+                    theme="tomorrow_night",
+                    key=ace_key,
+                    height=700,
+                    font_size=14,
+                    tab_size=2,
+                    show_gutter=True,
+                    wrap=True,
+                    auto_update=True,
+                    readonly=False,
+                )
+                if ace_value is not None:
+                    st.session_state[editor_buffer_key] = ace_value
+                    st.session_state[editor_key] = ace_value
+                    buffer_text = ace_value
+            else:
+                st.info(
+                    "Advanced editor component unavailable; using fallback editor."
+                )
+                st.text_area(
+                    "truth.json",
+                    key=editor_key,
+                    height=700,
+                )
+                buffer_text = str(st.session_state.get(editor_key, "{}"))
+                st.session_state[editor_buffer_key] = buffer_text
+
+        raw_text = buffer_text
+        parsed_json: Any = None
+        parse_error: json.JSONDecodeError | None = None
+        try:
+            parsed_json = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            parse_error = exc
+
+        is_dict = isinstance(parsed_json, dict)
+        structure_warnings: list[str] = (
+            _truth_structure_warnings(parsed_json) if is_dict else []
+        )
+
+        line_count = raw_text.count("\n") + 1 if raw_text else 1
+        char_count = len(raw_text)
+        saved_snapshot = str(st.session_state.get(saved_snapshot_key, ""))
+        is_dirty = raw_text != saved_snapshot
+        syntax_ok = parse_error is None
+
+        with side_col:
+            st.markdown("#### Quick Status")
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("Lines", line_count)
+            with m2:
+                st.metric("Chars", char_count)
+            m3, m4 = st.columns(2)
+            with m3:
+                st.metric("Syntax", "OK" if syntax_ok else "Error")
+            with m4:
+                st.metric("Dirty", "Yes" if is_dirty else "No")
+            st.caption("Tip: Ctrl/Cmd+F for search, Tab/Shift+Tab for indent.")
+
+            st.markdown("#### Diagnostics")
+            if parse_error is not None:
+                st.error(
+                    f"Syntax error: {parse_error.msg} (line {parse_error.lineno}, column {parse_error.colno})"
+                )
+                st.code(_json_error_context(raw_text, parse_error), language="text")
+            elif not is_dict:
+                st.error("Top-level JSON must be an object.")
+            else:
+                st.success("JSON syntax is valid.")
+                if structure_warnings:
+                    st.warning("Structure warnings found.")
+                    for warning in structure_warnings:
+                        st.write(f"- {warning}")
+                else:
+                    st.success("Structure checks passed.")
+
+                st.markdown("#### Content Stats")
+                top_keys = len(parsed_json.keys())
+                projects_count = (
+                    len(parsed_json.get("projects", []))
+                    if isinstance(parsed_json.get("projects"), list)
+                    else 0
+                )
+                experience_count = (
+                    len(parsed_json.get("experience", []))
+                    if isinstance(parsed_json.get("experience"), list)
+                    else 0
+                )
+                ms1, ms2, ms3 = st.columns(3)
+                with ms1:
+                    st.metric("Keys", top_keys)
+                with ms2:
+                    st.metric("Projects", projects_count)
+                with ms3:
+                    st.metric("Experience", experience_count)
+
+            if validate_clicked:
+                if parse_error is not None or not is_dict:
+                    st.error("Validation failed.")
+                elif structure_warnings:
+                    st.warning("Validation completed with warnings.")
+                else:
+                    st.success("Validation successful.")
+
+            st.markdown("#### Path Inspector")
+            path_key = f"profile_path_query_{uid}"
+            st.text_input(
+                "Path (e.g. personal_information.email, projects[0].description)",
+                key=path_key,
+            )
+            inspect_clicked = st.button(
+                "Inspect path",
+                key=f"inspect_profile_path_{uid}",
+                use_container_width=True,
+            )
+            if inspect_clicked:
+                if not is_dict:
+                    st.error("Path inspector requires valid object JSON.")
+                else:
+                    try:
+                        value = _json_path_lookup(
+                            parsed_json, st.session_state.get(path_key, "")
+                        )
+                        if isinstance(value, (dict, list)):
+                            st.code(
+                                json.dumps(value, indent=2, ensure_ascii=False),
+                                language="json",
+                            )
+                        else:
+                            st.code(str(value), language="text")
+                    except Exception as exc:
+                        st.error(f"Path error: {exc}")
+
+            save_disabled = parse_error is not None or not is_dict or (
+                is_dirty and not st.session_state.get(save_confirm_key, False)
+            )
+            if is_dirty and not st.session_state.get(save_confirm_key, False):
+                st.warning("Review diff and confirm before saving.")
+
+            if st.button(
+                "Save Profile",
+                key=f"save_profile_{uid}",
+                use_container_width=True,
+                disabled=save_disabled,
+            ):
+                try:
+                    parsed = json.loads(raw_text)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("Profile JSON must be a JSON object.")
+                    backend.save_truth_json(uid, parsed)
+                    st.session_state[saved_snapshot_key] = raw_text
+                    st.session_state[save_confirm_key] = False
+                    st.success("Profile saved locally.")
+                except Exception as exc:
+                    st.error(f"Save failed: {exc}")
+
+        with st.expander("Diff Preview", expanded=False):
+            if not is_dirty:
+                st.success("No unsaved changes.")
+            else:
+                diff_lines = list(
+                    difflib.unified_diff(
+                        saved_snapshot.splitlines(),
+                        raw_text.splitlines(),
+                        fromfile="last_saved",
+                        tofile="editor",
+                        lineterm="",
+                    )
+                )
+                if diff_lines:
+                    st.code("\n".join(diff_lines), language="diff")
+                else:
+                    st.info("No textual diff available.")
+                st.checkbox(
+                    "I reviewed the diff and want to save these changes",
+                    key=save_confirm_key,
+                )
 
 
 def main() -> None:
@@ -795,14 +1324,36 @@ def main() -> None:
     controller = _ensure_controller()
     controller.poll()
 
-    left_col, right_col = st.columns([1.5, 1.5], gap="medium")
+    backend, backend_error = _ensure_local_backend()
+    if backend_error:
+        st.error(backend_error)
+        st.info("Local backend could not be initialized.")
+        return
+    if backend is None:
+        st.error("Local backend unavailable.")
+        return
 
-    with left_col:
-        _render_resume_panel(controller)
+    _render_auth_panel(backend)
+    auth_user = _get_auth_user()
+    if not auth_user:
+        return
 
-    with right_col:
-        _render_logs_panel(controller)
-        _render_controls_panel(controller)
+    uid = str(auth_user["uid"])
+    _sync_finished_run_artifacts(controller, backend, uid)
+    last_sync_error = st.session_state.pop("last_sync_error", "")
+    if last_sync_error:
+        st.warning(f"Local sync warning: {last_sync_error}")
+
+    resume_tab, profile_tab = st.tabs(["Resume Studio", "Master Profile"])
+    with resume_tab:
+        left_col, right_col = st.columns([1.5, 1.5], gap="medium")
+        with left_col:
+            _render_resume_panel(controller, backend, uid)
+        with right_col:
+            _render_logs_panel(controller)
+            _render_controls_panel(controller, backend, uid)
+    with profile_tab:
+        _render_profile_editor_panel(backend, uid)
 
     if controller.is_running():
         time.sleep(1)

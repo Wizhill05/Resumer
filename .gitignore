@@ -6,3 +6,5 @@ __pycache__/
 output/
 outputs/
 .resumer_gui/
+data/
+job_organizer/

@@ -123,6 +123,44 @@ def _extract_json_object(raw_text: str) -> str:
     return raw_text.strip()
 
 
+def _normalize_applying_for(value: str) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return None
+
+    text = re.sub(
+        r"^(?:applying\s*for|title|role|position)\s*[:\-]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip(" :;,.()-")
+    text = re.sub(
+        r"\b(?:senior|sr\.?|junior|jr\.?|principal|staff|lead)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b(?:l\d+|level\s*\d+|i{1,4}|v)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" :;,.()-")
+    if not text:
+        return None
+
+    text = re.sub(r"\bback[\s-]*end\b", "Backend", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfront[\s-]*end\b", "Frontend", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfull[\s-]*stack\b", "Full Stack", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdevops\b", "DevOps", text, flags=re.IGNORECASE)
+    text = text.title()
+    text = re.sub(r"\bDevops\b", "DevOps", text)
+    text = re.sub(r"\bApi\b", "API", text)
+    text = re.sub(r"\bAi\b", "AI", text)
+    text = re.sub(r"\bMl\b", "ML", text)
+    text = re.sub(r"\bQa\b", "QA", text)
+    text = re.sub(r"\bUi\b", "UI", text)
+    text = re.sub(r"\bUx\b", "UX", text)
+    text = re.sub(r"\bSql\b", "SQL", text)
+    return text or None
+
+
 def _infer_applying_for_from_jd(job_description: str) -> str | None:
     """Infer a role title from the job description when the model omits it."""
     role_keywords = (
@@ -168,6 +206,13 @@ def _infer_applying_for_from_jd(job_description: str) -> str | None:
         if not candidate:
             return None
 
+        candidate = re.sub(
+            r"^(?:title|role|position|applying\s*for)\s*[:\-]\s*",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+
         lowered = f" {candidate.lower()} "
         for splitter in trailing_splitters:
             if splitter in lowered:
@@ -186,24 +231,7 @@ def _infer_applying_for_from_jd(job_description: str) -> str | None:
         if not any(word in role_keywords for word in lowered_words):
             return None
 
-        candidate = re.sub(r"\bback[\s-]*end\b", "Backend", candidate, flags=re.IGNORECASE)
-        candidate = re.sub(
-            r"\bfront[\s-]*end\b", "Frontend", candidate, flags=re.IGNORECASE
-        )
-        candidate = re.sub(
-            r"\bfull[\s-]*stack\b", "Full Stack", candidate, flags=re.IGNORECASE
-        )
-        candidate = re.sub(r"\bdevops\b", "DevOps", candidate, flags=re.IGNORECASE)
-        candidate = candidate.title()
-        candidate = re.sub(r"\bDevops\b", "DevOps", candidate)
-        candidate = re.sub(r"\bApi\b", "API", candidate)
-        candidate = re.sub(r"\bAi\b", "AI", candidate)
-        candidate = re.sub(r"\bMl\b", "ML", candidate)
-        candidate = re.sub(r"\bQa\b", "QA", candidate)
-        candidate = re.sub(r"\bUi\b", "UI", candidate)
-        candidate = re.sub(r"\bUx\b", "UX", candidate)
-        candidate = re.sub(r"\bSql\b", "SQL", candidate)
-        return candidate.strip()
+        return _normalize_applying_for(candidate)
 
     lines = [line.strip() for line in job_description.splitlines() if line.strip()]
     if not lines:
@@ -268,8 +296,12 @@ def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                payload["applying_for"] = value.strip()
+                payload["applying_for"] = _normalize_applying_for(value) or value.strip()
                 break
+    elif isinstance(payload.get("applying_for"), str):
+        normalized = _normalize_applying_for(str(payload["applying_for"]))
+        if normalized:
+            payload["applying_for"] = normalized
 
     # Map alternate naming for objective.
     if not payload.get("objective"):
@@ -616,6 +648,8 @@ def main() -> None:
                         _warn(f"Model output preview: {preview}")
                     break
 
+            source_current_json = current_json
+
             # ── Apply CLI omission flags BEFORE PDF compilation ────────────
             try:
                 temp_data = json.loads(current_json)
@@ -623,6 +657,10 @@ def main() -> None:
                     inferred_role = _infer_applying_for_from_jd(jd)
                     if inferred_role:
                         temp_data["applying_for"] = inferred_role
+                if isinstance(temp_data.get("applying_for"), str):
+                    normalized = _normalize_applying_for(temp_data["applying_for"])
+                    if normalized:
+                        temp_data["applying_for"] = normalized
                 if args.no_objective:
                     temp_data["objective"] = None
                 if args.no_skills:
@@ -641,6 +679,17 @@ def main() -> None:
 
             # ── Deterministic PDF compilation & check ──────────────────────
             compile_pdf.func(current_json, str(iteration))
+            try:
+                source_payload = json.loads(source_current_json)
+                (output_dir / f"draft_v{iteration}.source.json").write_text(
+                    json.dumps(source_payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                (output_dir / f"draft_v{iteration}.source.json").write_text(
+                    source_current_json,
+                    encoding="utf-8",
+                )
             pdf_path = output_dir / f"draft_v{iteration}.pdf"
 
             if not pdf_path.exists():
@@ -705,6 +754,12 @@ def main() -> None:
             best_md = best_pdf.with_suffix(".md")
             if best_md.exists():
                 shutil.copy2(best_md, output_dir / "final_resume.md")
+            best_json = best_pdf.with_suffix(".json")
+            if best_json.exists():
+                shutil.copy2(best_json, output_dir / "final_resume.json")
+            best_source_json = output_dir / f"{best_pdf.stem}.source.json"
+            if best_source_json.exists():
+                shutil.copy2(best_source_json, output_dir / "final_resume.source.json")
         else:
             _warn("No PDF drafts found in output folder.")
             _warn("The crew may not have used the compile_pdf tool.")

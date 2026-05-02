@@ -80,6 +80,33 @@ def set_shared_state(profile: dict, output_dir: str) -> None:
     _shared_state["output_dir"] = output_dir
 
 
+def render_resume_artifacts(
+    *,
+    profile: dict,
+    resume_data: dict,
+    output_dir: str | Path,
+    stem: str,
+) -> tuple[Path, Path, int]:
+    """Render resume markdown and PDF artifacts without invoking an LLM."""
+    from makepdf import generate_pdf  # lazy import to avoid circular deps
+
+    output_path = Path(output_dir)
+    output_path.parent.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True)
+
+    md_content = _render_template(profile, resume_data)
+    md_path = output_path / f"{stem}.md"
+    pdf_path = output_path / f"{stem}.pdf"
+    md_path.write_text(md_content, encoding="utf-8")
+
+    _, content_height = generate_pdf(
+        md_path=str(md_path),
+        css_path=str(TEMPLATE_CSS),
+        output_path=str(pdf_path),
+    )
+    return md_path, pdf_path, content_height
+
+
 # ---------------------------------------------------------------------------
 # CrewAI Tools
 # ---------------------------------------------------------------------------
@@ -96,8 +123,6 @@ def compile_pdf(resume_json: str, iteration: str) -> str:
     Returns:
         A message with the output PDF path and the page count.
     """
-    from makepdf import generate_pdf  # lazy import to avoid circular deps
-
     profile = _shared_state["profile"]
     output_dir = Path(_shared_state["output_dir"])
 
@@ -110,17 +135,17 @@ def compile_pdf(resume_json: str, iteration: str) -> str:
     except json.JSONDecodeError as e:
         return f"ERROR: Invalid JSON — {e}"
 
-    # Render markdown from Jinja2 template
-    md_content = _render_template(profile, resume_data)
-    md_path = output_dir / f"draft_v{iteration}.md"
-    md_path.write_text(md_content, encoding="utf-8")
+    json_path = output_dir / f"draft_v{iteration}.json"
+    json_path.write_text(
+        json.dumps(resume_data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
-    # Compile PDF
-    pdf_path = output_dir / f"draft_v{iteration}.pdf"
-    _, content_height = generate_pdf(
-        md_path=str(md_path),
-        css_path=str(TEMPLATE_CSS),
-        output_path=str(pdf_path),
+    _, pdf_path, content_height = render_resume_artifacts(
+        profile=profile,
+        resume_data=resume_data,
+        output_dir=output_dir,
+        stem=f"draft_v{iteration}",
     )
 
     # Store content height so main.py can detect underflow

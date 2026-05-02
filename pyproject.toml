@@ -13,8 +13,16 @@ dependencies = [
     "pydantic>=2.0.0",
     "jinja2>=3.1.0",
     "python-dotenv>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.9",
+    "websockets>=12.0",
+    # Legacy Streamlit UI (keep until Next.js is fully validated)
     "streamlit-ace>=0.1.1",
     "streamlit>=1.44.0",
     "selenium>=4.43.0",
     "webdriver-manager>=4.0.2",
+    "beautifulsoup4>=4.14.3",
+    "lxml>=6.1.0",
+    "chompjs>=1.4.0",
 ]

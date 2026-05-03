@@ -468,6 +468,12 @@ def main() -> None:
     parser.add_argument(
         "--no-photo", action="store_true", help="Omit the profile photo"
     )
+    parser.add_argument(
+        "--mandatory-words",
+        nargs="*",
+        default=[],
+        help="List of words that MUST be included word-for-word",
+    )
     args = parser.parse_args()
 
     if args.model.strip():
@@ -574,6 +580,7 @@ def main() -> None:
                     "job_description": jd,
                     "output_dir": str(output_dir),
                     "iteration": str(iteration),
+                    "mandatory_words": ", ".join(args.mandatory_words) if args.mandatory_words else "None",
                 }
                 result = crew_instance.writing_crew().kickoff(inputs=inputs)
             else:

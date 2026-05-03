@@ -1,0 +1,360 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+/* ── Blueprint Design System ─────────────────────────────── */
+:root {
+  --bg:           #021224;
+  --bg-panel:     #031830;
+  --bg-input:     #010c18;
+  --line:         #0c3060;
+  --line-dim:     #071a36;
+  --cyan:         #0c54a5;
+  --cyan-dim:     #07336a;
+  --cyan-bright:  #2b7de9;
+  --white:        #f0f6ff;   /* was #d6e8ff — near-white for primary text */
+  --white-dim:    #b8d4f0;   /* secondary text, slightly softer */
+  --muted:        #6a9cc8;   /* was #3d6a9e — now readable mid-blue-grey */
+  --red:          #e05263;
+  --green:        #3ac97a;
+  --yellow:       #e8b84b;
+  --font-mono:    'JetBrains Mono', ui-monospace, Consolas, monospace;
+}
+
+/* ── Reset ────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-radius: 0 !important;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+}
+
+body {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--white);
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--line-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-dim) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--line); }
+
+/* ── Typography ───────────────────────────────────────────── */
+h1, h2, h3, h4 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ── Utility: border colours ──────────────────────────────── */
+.border-bp     { border: 1px solid var(--line); }
+.border-bp-dim { border: 1px solid var(--line-dim); }
+.border-t-bp   { border-top: 1px solid var(--line); }
+.border-b-bp   { border-bottom: 1px solid var(--line); }
+.border-l-bp   { border-left: 1px solid var(--line); }
+.border-r-bp   { border-right: 1px solid var(--line); }
+
+/* ── Label chip ─────────────────────────────────── */
+.bp-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 2px 6px;
+  border: 1px solid var(--line-dim);
+  background: var(--bg);
+}
+
+/* ── Inputs & Textareas ────────────────────────────── */
+textarea, input[type="text"], input[type="number"] {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--white);
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  width: 100%;
+  resize: vertical;
+  outline: none;
+  line-height: 1.6;
+}
+textarea:focus, input[type="text"]:focus, input[type="number"]:focus {
+  border-color: var(--cyan-dim);
+}
+textarea::placeholder, input[type="text"]::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+select {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--white);
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  padding: 6px 24px 6px 12px;
+  width: 100%;
+  outline: none;
+}
+select:focus { border-color: var(--cyan-dim); }
+select option {
+  background: var(--bg-panel);
+  color: var(--white);
+}
+
+/* ── Primary button ───────────────────────────────────────── */
+.btn-primary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #d6e8ff;
+  background: var(--cyan);
+  border: 1px solid var(--cyan-bright);
+  cursor: pointer;
+  padding: 0 24px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.btn-primary:hover { background: var(--cyan-bright); }
+.btn-primary:disabled { background: var(--cyan-dim); color: var(--muted); cursor: not-allowed; border-color: var(--line); }
+
+/* ── Danger / stop button ─────────────────────────────────── */
+.btn-danger {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--red);
+  background: transparent;
+  border: 1px solid var(--red);
+  cursor: pointer;
+  padding: 0 24px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-danger:hover { background: rgba(255,77,109,0.08); }
+
+/* ── Ghost button ──────────────────────────────────── */
+.btn-ghost {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--white-dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  padding: 0 14px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-ghost:hover { border-color: var(--cyan-bright); color: var(--cyan-bright); }
+.btn-ghost.active { border-color: var(--cyan-bright); color: var(--cyan-bright); }
+
+/* ── Nav bar ──────────────────────────────────────────────── */
+.bp-nav {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  padding: 0 24px;
+  gap: 24px;
+  flex-shrink: 0;
+}
+.bp-nav-logo {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cyan-bright);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-right: 1px solid var(--line);
+  padding-right: 24px;
+  margin-right: 0;
+}
+.bp-nav-link {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--white-dim);
+  text-decoration: none;
+  padding: 12px 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.bp-nav-link:hover { color: var(--white); }
+.bp-nav-link.active { color: var(--cyan-bright); border-bottom-color: var(--cyan-bright); }
+
+/* ── Panel ────────────────────────────────────────────────── */
+.bp-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+}
+
+/* ── Status badge ─────────────────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.status-dot.running  { background: var(--cyan-bright); }
+.status-dot.completed { background: var(--green); }
+.status-dot.failed   { background: var(--red); }
+.status-dot.stopped  { background: var(--yellow); }
+
+/* ── Log terminal ─────────────────────────────────────────── */
+.log-terminal {
+  background: #010c18;
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 12px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-error   { color: var(--red); font-weight: 600; }
+.log-warn    { color: var(--yellow); font-weight: 600; }
+.log-success { color: var(--green); font-weight: 600; }
+.log-event   { color: var(--cyan-bright); font-weight: 600; }
+.log-info    { color: #9abcdb; }
+
+/* ── Project row ──────────────────────────────────────────── */
+.project-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-dim);
+  cursor: pointer;
+}
+.project-row:last-child { border-bottom: none; }
+.project-row:hover { background: rgba(77,217,255,0.03); }
+.project-row.selected { background: rgba(12,84,165,0.12); border-left: 2px solid var(--cyan-bright); }
+
+/* ── Resize handle ────────────────────────────────────────── */
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--line);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+.resize-handle:hover, .resize-handle.dragging { background: var(--cyan-bright); }
+
+/* ── Jobs table ──────────────────────────────────────────── */
+.jobs-table-header {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.jobs-table-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--white);
+}
+.jobs-table-row:hover { background: rgba(77,217,255,0.03); }
+.jobs-table-row.expanded { background: rgba(12,84,165,0.12); border-left: 2px solid var(--cyan-bright); }
+
+.job-detail-panel {
+  padding: 14px 20px 14px 28px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ── Job Library ──────────────────────────────────────────── */
+.library-job-card {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-dim);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.library-job-card:hover {
+  background: rgba(77,217,255,0.03);
+}
+.library-job-card.selected {
+  background: rgba(12,84,165,0.12);
+  border-left: 2px solid var(--cyan-bright);
+}
+
+.detail-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  color: var(--white-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 2px;
+}
+
+.skill-chip {
+  display: inline-block;
+  padding: 3px 8px;
+  background: rgba(43,125,233,0.1);
+  border: 1px solid var(--cyan-bright);
+  color: var(--cyan-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 2px;
+}

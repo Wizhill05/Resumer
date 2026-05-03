@@ -103,6 +103,7 @@ class ResumeRunController:
         model: str,
         api_key_env: str,
         omissions: dict[str, bool],
+        mandatory_words: list[str] | None = None,
         project_id: str = "",
         project_name: str = "",
     ) -> None:
@@ -152,6 +153,10 @@ class ResumeRunController:
         for key, flag in flag_map.items():
             if omissions.get(key, False):
                 cmd.append(flag)
+
+        if mandatory_words:
+            cmd.append("--mandatory-words")
+            cmd.extend(mandatory_words)
 
         env = os.environ.copy()
         env["RESUMER_MODEL"] = model

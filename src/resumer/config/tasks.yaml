@@ -21,8 +21,12 @@ write_resume:
     - You MUST include the "EXTRA-CURRICULAR ACTIVITIES & ACHIEVEMENTS" section, grouping
       achievements and other skills from the profile by topics
       such as 'Achievements', 'Activities', or 'Public Speaking'. Do not skip this section.
+    - TITLE CASE RULE: All dynamically generated category names and topic subheadings (e.g. for Skills or Extra-Curriculars) MUST be in standard Title Case with spaces (e.g. "AI and RAG Technologies", "Backend and Data"). Do NOT use snake_case, underscores, or all-lowercase.
 
     Step 2 — Output the final customized Resume exactly matching the required JSON schema.
+
+    Mandatory Words (You MUST include ALL of these words word-for-word anywhere in the resume, for example in the skills section or the projects/work experience section descriptions):
+    {mandatory_words}
 
     Candidate Profile:
     {profile_json}
@@ -57,6 +61,8 @@ shorten_resume:
     5. If uncertain, under-cut slightly rather than over-cut; the loop will call you again.
 
     STRICT GUARDRAILS:
+    - YOU MUST RETURN THE EXACT STRUCTURE AND TEXT FROM `previous_json`!
+    - DO NOT rewrite the resume from scratch. DO NOT paraphrase content unless you are shortening it.
     - Prefer preserving Projects and Experience depth.
     - Never remove more than one full entry (project OR experience) in a single iteration.
     - Keep at least 2 experience entries whenever possible.
@@ -67,6 +73,7 @@ shorten_resume:
     ACCEPTANCE TARGET:
     - Aim to remove approximately {overflow_lines} lines with minimal edits.
     - Do not aggressively over-cut. Over-cutting is worse than slight under-cutting in this loop.
+    - Output the ENTIRE valid JSON object with your modifications, not just a diff.
 
     Resume JSON to trim:
     {previous_json}
@@ -74,5 +81,5 @@ shorten_resume:
     Target Job Description (for relevance decisions):
     {job_description}
   expected_output: >
-    The fully modified TailoredResume JSON object representing the newly shortened resume.
+    The ENTIRE modified TailoredResume JSON object, containing all fields from previous_json but slightly shortened.
   agent: resume_shortener

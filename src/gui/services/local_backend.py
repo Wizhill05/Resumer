@@ -85,9 +85,37 @@ class LocalBackend:
                 ON project_artifacts(project_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_artifacts_user_project
                 ON project_artifacts(user_id, project_id);
+
+            CREATE TABLE IF NOT EXISTS scraped_jobs (
+                id             TEXT PRIMARY KEY,
+                title          TEXT NOT NULL DEFAULT '',
+                company        TEXT NOT NULL DEFAULT '',
+                location       TEXT NOT NULL DEFAULT '',
+                link           TEXT NOT NULL DEFAULT '',
+                pay            TEXT NOT NULL DEFAULT '',
+                min_salary     REAL,
+                max_salary     REAL,
+                posted_date    TEXT NOT NULL DEFAULT '',
+                metadata       TEXT NOT NULL DEFAULT '[]',
+                snippet        TEXT NOT NULL DEFAULT '[]',
+                description    TEXT NOT NULL DEFAULT '',
+                technical_skills TEXT NOT NULL DEFAULT '[]',
+                raw_attributes TEXT NOT NULL DEFAULT '[]',
+                scrape_session TEXT NOT NULL DEFAULT '',
+                status         TEXT NOT NULL DEFAULT 'basic',
+                created_at     TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
+        # Live migration: add preferences_json if the DB was created before this column existed.
+        try:
+            self.conn.execute(
+                "ALTER TABLE profiles ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
 
     def _ensure_default_user(self) -> None:
         count = self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -164,6 +192,34 @@ class LocalBackend:
             VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 truth_json = excluded.truth_json,
+                updated_at = excluded.updated_at
+            """,
+            (uid, payload, now, now),
+        )
+        self.conn.commit()
+
+    def get_preferences(self, uid: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT preferences_json FROM profiles WHERE user_id = ? LIMIT 1", (uid,)
+        ).fetchone()
+        if row is not None:
+            try:
+                data = json.loads(str(row["preferences_json"] or "{}"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        return {}
+
+    def save_preferences(self, uid: str, preferences: dict[str, Any]) -> None:
+        now = _now_iso()
+        payload = json.dumps(preferences, ensure_ascii=False)
+        self.conn.execute(
+            """
+            INSERT INTO profiles (user_id, truth_json, preferences_json, created_at, updated_at)
+            VALUES (?, '{}', ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                preferences_json = excluded.preferences_json,
                 updated_at = excluded.updated_at
             """,
             (uid, payload, now, now),
@@ -361,6 +417,115 @@ class LocalBackend:
 
     def sample_truth_json(self) -> dict[str, Any]:
         return self._read_sample_truth_json()
+
+    # ── Scraped Jobs CRUD ─────────────────────────────────────────────────────
+
+    def upsert_scraped_job(self, job: dict[str, Any]) -> None:
+        """Insert or update a single scraped job row."""
+        now = _now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO scraped_jobs (
+                id, title, company, location, link, pay,
+                min_salary, max_salary, posted_date,
+                metadata, snippet, description,
+                technical_skills, raw_attributes,
+                scrape_session, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                company = excluded.company,
+                location = excluded.location,
+                link = excluded.link,
+                pay = excluded.pay,
+                min_salary = excluded.min_salary,
+                max_salary = excluded.max_salary,
+                posted_date = excluded.posted_date,
+                metadata = excluded.metadata,
+                snippet = excluded.snippet,
+                description = excluded.description,
+                technical_skills = excluded.technical_skills,
+                raw_attributes = excluded.raw_attributes,
+                scrape_session = excluded.scrape_session,
+                status = excluded.status
+            """,
+            (
+                job.get("id", ""),
+                job.get("title", ""),
+                job.get("company", ""),
+                job.get("location", ""),
+                job.get("link", ""),
+                job.get("pay", ""),
+                job.get("min_salary_inr") or job.get("min_salary"),
+                job.get("max_salary_inr") or job.get("max_salary"),
+                job.get("posted_date", ""),
+                json.dumps(job.get("metadata", []), ensure_ascii=False),
+                json.dumps(job.get("snippet", []), ensure_ascii=False),
+                job.get("description", ""),
+                json.dumps(job.get("technical_skills", []), ensure_ascii=False),
+                json.dumps(job.get("raw_attributes", []), ensure_ascii=False),
+                job.get("scrape_session", ""),
+                job.get("status", "basic"),
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def upsert_scraped_jobs(self, jobs: list[dict[str, Any]]) -> None:
+        """Batch upsert a list of scraped jobs."""
+        for job in jobs:
+            self.upsert_scraped_job(job)
+
+    def list_scraped_jobs(self) -> list[dict[str, Any]]:
+        """Return all scraped jobs."""
+        rows = self.conn.execute(
+            """
+            SELECT id, title, company, location, link, pay,
+                   min_salary, max_salary, posted_date,
+                   metadata, snippet, description,
+                   technical_skills, raw_attributes,
+                   scrape_session, status, created_at
+            FROM scraped_jobs
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            result.append({
+                "id": str(row["id"]),
+                "title": str(row["title"]),
+                "company": str(row["company"]),
+                "location": str(row["location"]),
+                "link": str(row["link"]),
+                "pay": str(row["pay"]),
+                "min_salary": row["min_salary"],
+                "max_salary": row["max_salary"],
+                "posted_date": str(row["posted_date"]),
+                "metadata": json.loads(row["metadata"] or "[]"),
+                "snippet": json.loads(row["snippet"] or "[]"),
+                "description": str(row["description"]),
+                "technical_skills": json.loads(row["technical_skills"] or "[]"),
+                "raw_attributes": json.loads(row["raw_attributes"] or "[]"),
+                "scrape_session": str(row["scrape_session"]),
+                "status": str(row["status"]),
+                "created_at": _safe_dt(row["created_at"]),
+            })
+        return result
+
+    def delete_scraped_jobs(self, ids: list[str]) -> None:
+        """Delete scraped jobs by ID."""
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self.conn.execute(
+            f"DELETE FROM scraped_jobs WHERE id IN ({placeholders})", ids
+        )
+        self.conn.commit()
+
+    def delete_all_scraped_jobs(self) -> None:
+        """Wipe all scraped jobs."""
+        self.conn.execute("DELETE FROM scraped_jobs")
+        self.conn.commit()
 
     def _artifact_meta_from_file_name(self, file_name: str) -> dict[str, Any]:
         lower_name = file_name.lower()

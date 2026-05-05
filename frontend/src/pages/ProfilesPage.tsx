@@ -24,8 +24,8 @@ export type SectionKey = (typeof SECTIONS)[number]['key']
 export type Omissions = Record<SectionKey, boolean>
 
 export const DEFAULT_OMISSIONS: Omissions = {
-  no_photo:        false,
-  no_applying_for: false,
+  no_photo:        true,
+  no_applying_for: true,
   no_objective:    false,
   no_education:    false,
   no_skills:       false,

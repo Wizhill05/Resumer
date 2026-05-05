@@ -52,6 +52,7 @@ const API = '/api'
 const MIN_SIDEBAR = 280
 const MAX_SIDEBAR = 900
 const DEFAULT_SIDEBAR = 420
+const MAX_ITERATIONS = 5
 
 const MODEL_PRESETS: Record<string, { model: string; key_env: string }> = {
   'Mistral Large':         { model: 'mistral/mistral-large-latest',              key_env: 'MISTRAL_API_KEY' },
@@ -63,6 +64,11 @@ const MODEL_PRESETS: Record<string, { model: string; key_env: string }> = {
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function GeneratePage() {
+  const clampIterations = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return 1
+    return Math.max(1, Math.min(MAX_ITERATIONS, Math.trunc(value)))
+  }, [])
+
   // Resize
   const [sidebarW, setSidebarW] = useState(DEFAULT_SIDEBAR)
   const dragging = useRef(false)
@@ -76,7 +82,7 @@ export default function GeneratePage() {
   const [jd, setJd] = useState('')
   const [jobLabel, setJobLabel] = useState('')
   const [selectedPreset, setSelectedPreset] = useState('Mistral Large')
-  const [maxIter, setMaxIter] = useState(10)
+  const [maxIter, setMaxIter] = useState(MAX_ITERATIONS)
   const [omissions, setOmissions] = useState<Omissions>({ ...DEFAULT_OMISSIONS })
   const [mandatoryWords, setMandatoryWords] = useState<string[]>([])
   const [customWordInput, setCustomWordInput] = useState('')
@@ -232,7 +238,7 @@ export default function GeneratePage() {
         job_label: jobLabel,
         model: preset.model,
         api_key_env: preset.key_env,
-        max_iterations: maxIter,
+        max_iterations: clampIterations(maxIter),
         omissions: omissions,
         mandatory_words: mandatoryWords,
       }),
@@ -315,8 +321,8 @@ export default function GeneratePage() {
             </Cell>
             <Cell label="MAX ITER">
               <input
-                type="number" value={maxIter} min={1} max={20}
-                onChange={e => setMaxIter(Number(e.target.value))}
+                type="number" value={maxIter} min={1} max={MAX_ITERATIONS}
+                onChange={e => setMaxIter(clampIterations(Number(e.target.value)))}
                 style={inputStyle}
               />
             </Cell>

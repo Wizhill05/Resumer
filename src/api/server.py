@@ -37,6 +37,8 @@ from src.gui.services.runner import ResumeRunController  # noqa: E402
 from src.api.scrape_service import ScrapeService  # noqa: E402
 
 # ── Singletons ────────────────────────────────────────────────────────────────
+MAX_SHORTENING_ITERATIONS = 5
+
 _backend = LocalBackend()
 
 # One controller per active run — keyed by project_id.
@@ -73,7 +75,7 @@ class GenerateRequest(BaseModel):
     job_label: str = ""
     model: str = "mistral/mistral-large-latest"
     api_key_env: str = "MISTRAL_API_KEY"
-    max_iterations: int = 10
+    max_iterations: int = MAX_SHORTENING_ITERATIONS
     omissions: dict[str, bool] = {}
     mandatory_words: list[str] = []
 
@@ -101,6 +103,10 @@ def _sanitize_label(label: str) -> str:
     label = label.lower().strip()
     label = re.sub(r"[^a-z0-9]+", "_", label)
     return label.strip("_") or "untitled_run"
+
+
+def _sanitize_max_iterations(value: int) -> int:
+    return max(1, min(MAX_SHORTENING_ITERATIONS, value))
 
 
 # ── User endpoints ────────────────────────────────────────────────────────────
@@ -247,11 +253,12 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
     # Build and start the controller
     controller = ResumeRunController(workspace_root=_PROJECT_ROOT)
     _set_controller(project_id, controller)
+    max_iterations = _sanitize_max_iterations(body.max_iterations)
 
     controller.start_run(
         jd_path=str(jd_path.relative_to(_PROJECT_ROOT)),
         data_path=str(data_path.relative_to(_PROJECT_ROOT)),
-        max_iterations=body.max_iterations,
+        max_iterations=max_iterations,
         job_label=sanitized_label,
         model=body.model,
         api_key_env=body.api_key_env,
@@ -358,6 +365,32 @@ def delete_all_scraped_jobs() -> Response:
 def delete_scraped_job(job_id: str) -> Response:
     _backend.delete_scraped_jobs([job_id])
     return Response(status_code=204)
+
+
+class LinkJobRequest(BaseModel):
+    project_id: str
+
+
+@app.put("/api/jobs/{job_id}/project")
+def link_job_to_project(job_id: str, body: LinkJobRequest) -> dict[str, str]:
+    _backend.link_job_to_project(job_id=job_id, project_id=body.project_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/jobs/{job_id}/project", status_code=200)
+def unlink_job_from_project(job_id: str) -> dict[str, str]:
+    """Clear the project_id on a scraped job, making it eligible for batch processing again."""
+    _backend.link_job_to_project(job_id=job_id, project_id="")
+    return {"status": "ok"}
+
+
+class ApplyJobRequest(BaseModel):
+    applied: bool
+
+@app.put("/api/jobs/{job_id}/apply")
+def set_job_applied(job_id: str, body: ApplyJobRequest) -> dict[str, str]:
+    _backend.set_job_applied(job_id=job_id, applied=body.applied)
+    return {"status": "ok"}
 
 
 # ── Scrape lifecycle ──────────────────────────────────────────────────────────

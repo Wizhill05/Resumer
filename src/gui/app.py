@@ -926,7 +926,7 @@ def _render_controls_panel(
 
             with right:
                 max_iterations = st.slider(
-                    "No of Iterations", min_value=1, max_value=20, value=10
+                    "No of Iterations", min_value=1, max_value=5, value=5
                 )
                 st.markdown(
                     f"<div class='mono-note' style='margin-top:0.35rem; margin-bottom:0.9rem;'>"

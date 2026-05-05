@@ -1,269 +1,1088 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from "react";
 
-const API = '/api'
+const API = "/api";
 
 interface ScrapedJob {
-  id: string
-  title: string
-  company: string
-  location: string
-  link: string
-  pay: string
-  min_salary_inr: number | null
-  max_salary_inr: number | null
-  posted_date: string
-  description: string
-  technical_skills: string[]
-  metadata: string[]
-  status: string
-  scrape_session: string
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  link: string;
+  pay: string;
+  min_salary: number | null;
+  max_salary: number | null;
+  posted_date: string;
+  description: string;
+  technical_skills: string[];
+  metadata: string[];
+  snippet: string[];
+  raw_attributes: string[];
+  status: string;
+  scrape_session: string;
+  project_id: string;
+  applied: boolean;
+  created_at: string;
+}
+
+interface Artifact {
+  id: number;
+  file_name: string;
+  artifact_type: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number | null;
 }
 
 export default function JobLibraryPage() {
-  const [jobs, setJobs] = useState<ScrapedJob[]>([])
-  const [loading, setLoading] = useState(true)
+  const [jobs, setJobs] = useState<ScrapedJob[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedUid, setSelectedUid] = useState<string>("");
 
   // Filters
-  const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [hasSalaryFilter, setHasSalaryFilter] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [resumeFilter, setResumeFilter] = useState<"" | "has" | "none">("");
+  const [appliedFilter, setAppliedFilter] = useState<
+    "" | "applied" | "not_applied"
+  >("not_applied");
+  const [companyFilter, setCompanyFilter] = useState("");
+  const [hasDescFilter, setHasDescFilter] = useState(false);
+  const [hasSkillsFilter, setHasSkillsFilter] = useState(false);
+  const [hasSalaryFilter, setHasSalaryFilter] = useState(false);
+  const [sortBy, setSortBy] = useState<"date" | "company" | "title" | "salary">(
+    "date",
+  );
 
   // Selection
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+
+  // Artifacts
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(false);
 
   useEffect(() => {
-    fetchJobs()
-  }, [])
+    fetchUsers();
+    fetchJobs();
+  }, []);
 
-  async function fetchJobs() {
-    setLoading(true)
+  useEffect(() => {
+    if (selectedUid && selectedJobId) {
+      const job = jobs.find((j) => j.id === selectedJobId);
+      if (job?.project_id) loadArtifacts(job.project_id);
+      else setArtifacts([]);
+    }
+  }, [selectedJobId, selectedUid, jobs]);
+
+  async function fetchUsers() {
     try {
-      const res = await fetch(`${API}/jobs`)
-      const data: ScrapedJob[] = await res.json()
-      setJobs(data)
+      const res = await fetch(`${API}/users`);
+      const data: { id: string }[] = await res.json();
+      if (data.length > 0) setSelectedUid(data[0].id);
     } catch {
-      // Ignore
-    } finally {
-      setLoading(false)
+      /* ignore */
     }
   }
 
-  // Filter jobs based on global text search and dropdowns
-  const filteredJobs = useMemo(() => {
-    return jobs.filter(job => {
-      // 1. Status Filter
-      if (statusFilter && job.status !== statusFilter) return false
-      
-      // 2. Has Salary Filter
-      if (hasSalaryFilter && !job.pay) return false
+  async function fetchJobs() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/jobs`);
+      setJobs(await res.json());
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }
 
-      // 3. Global Text Search
+  async function loadArtifacts(projectId: string) {
+    if (!selectedUid) return;
+    setArtifactsLoading(true);
+    try {
+      const res = await fetch(
+        `${API}/users/${selectedUid}/projects/${projectId}/artifacts`,
+      );
+      setArtifacts(await res.json());
+    } catch {
+      setArtifacts([]);
+    } finally {
+      setArtifactsLoading(false);
+    }
+  }
+
+  async function deleteJob(id: string) {
+    if (!confirm("Delete this job listing entirely?")) return;
+    try {
+      await fetch(`${API}/jobs/${id}`, { method: "DELETE" });
+      if (selectedJobId === id) setSelectedJobId(null);
+      fetchJobs();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function toggleApplied(job: ScrapedJob) {
+    try {
+      const newApplied = !job.applied;
+      await fetch(`${API}/jobs/${job.id}/apply`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applied: newApplied }),
+      });
+      fetchJobs();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function deleteResume(job: ScrapedJob) {
+    if (
+      !confirm(
+        "Delete this job's resume? It will re-appear in Batch Processing.",
+      )
+    )
+      return;
+    try {
+      if (job.project_id && selectedUid)
+        await fetch(`${API}/users/${selectedUid}/projects/${job.project_id}`, {
+          method: "DELETE",
+        });
+      await fetch(`${API}/jobs/${job.id}/project`, { method: "DELETE" });
+      setArtifacts([]);
+      fetchJobs();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Unique companies for filter dropdown
+  const companies = useMemo(
+    () => [...new Set(jobs.map((j) => j.company).filter(Boolean))].sort(),
+    [jobs],
+  );
+
+  const filteredJobs = useMemo(() => {
+    let result = jobs.filter((job) => {
+      if (statusFilter && job.status !== statusFilter) return false;
+      if (resumeFilter === "has" && !job.project_id) return false;
+      if (resumeFilter === "none" && job.project_id) return false;
+      if (appliedFilter === "applied" && !job.applied) return false;
+      if (appliedFilter === "not_applied" && job.applied) return false;
+      if (companyFilter && job.company !== companyFilter) return false;
+      if (hasSalaryFilter && !job.pay && !job.min_salary) return false;
+      if (hasDescFilter && !job.description) return false;
+      if (hasSkillsFilter && !job.technical_skills?.length) return false;
       if (searchQuery) {
-        const query = searchQuery.toLowerCase()
-        const searchableText = [
+        const q = searchQuery.toLowerCase();
+        const text = [
           job.title,
           job.company,
           job.location,
           job.description,
           ...(job.technical_skills || []),
           ...(job.metadata || []),
-        ].filter(Boolean).join(' ').toLowerCase()
-
-        if (!searchableText.includes(query)) return false
+          ...(job.snippet || []),
+          ...(job.raw_attributes || []),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!text.includes(q)) return false;
       }
+      return true;
+    });
 
-      return true
-    })
-  }, [jobs, searchQuery, statusFilter, hasSalaryFilter])
+    result.sort((a, b) => {
+      if (sortBy === "company")
+        return (a.company || "").localeCompare(b.company || "");
+      if (sortBy === "title")
+        return (a.title || "").localeCompare(b.title || "");
+      if (sortBy === "salary") return (b.max_salary || 0) - (a.max_salary || 0);
+      return (b.created_at || "").localeCompare(a.created_at || "");
+    });
 
-  const selectedJob = useMemo(() => {
-    return jobs.find(j => j.id === selectedJobId) || null
-  }, [jobs, selectedJobId])
+    return result;
+  }, [
+    jobs,
+    searchQuery,
+    statusFilter,
+    resumeFilter,
+    appliedFilter,
+    companyFilter,
+    hasSalaryFilter,
+    hasDescFilter,
+    hasSkillsFilter,
+    sortBy,
+  ]);
 
-  // Select first job automatically when filter changes if none selected
+  const selectedJob = useMemo(
+    () => jobs.find((j) => j.id === selectedJobId) || null,
+    [jobs, selectedJobId],
+  );
+
   useEffect(() => {
-    if (filteredJobs.length > 0 && (!selectedJobId || !filteredJobs.find(j => j.id === selectedJobId))) {
-      setSelectedJobId(filteredJobs[0].id)
+    if (
+      filteredJobs.length > 0 &&
+      (!selectedJobId || !filteredJobs.find((j) => j.id === selectedJobId))
+    ) {
+      setSelectedJobId(filteredJobs[0].id);
     }
-  }, [filteredJobs, selectedJobId])
+  }, [filteredJobs, selectedJobId]);
+
+  const bestArtifact =
+    artifacts.find((a) => a.artifact_type === "final_pdf") ??
+    artifacts.find((a) => a.mime_type === "application/pdf") ??
+    artifacts[0] ??
+    null;
+
+  const activeFilterCount = [
+    statusFilter,
+    resumeFilter,
+    appliedFilter,
+    companyFilter,
+    hasSalaryFilter,
+    hasDescFilter,
+    hasSkillsFilter,
+  ].filter(Boolean).length;
+
+  function resetFilters() {
+    setStatusFilter("");
+    setResumeFilter("");
+    setAppliedFilter("");
+    setCompanyFilter("");
+    setHasSalaryFilter(false);
+    setHasDescFilter(false);
+    setHasSkillsFilter(false);
+    setSearchQuery("");
+    setSortBy("date");
+  }
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* ── Left: Job List & Filters ────────────────────────────── */}
-      <div style={{ width: 420, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%', borderRight: '1px solid var(--line)' }}>
-        
-        {/* Filters Panel */}
-        <div style={{ flexShrink: 0, background: 'var(--bg-panel)', borderBottom: '1px solid var(--line)' }}>
-          <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className="bp-label">JOB LIBRARY ({filteredJobs.length}/{jobs.length})</span>
-              <button className="btn-ghost" style={{ height: 24, padding: '0 8px', fontSize: 10 }} onClick={fetchJobs}>↻ REFRESH</button>
+    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+      {/* ── Left Panel ─────────────────────────────────────────────────── */}
+      <div
+        style={{
+          width: 400,
+          flexShrink: 0,
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          borderRight: "1px solid var(--line)",
+        }}
+      >
+        {/* Filter header */}
+        <div
+          style={{
+            flexShrink: 0,
+            background: "var(--bg-panel)",
+            borderBottom: "1px solid var(--line)",
+          }}
+        >
+          <div
+            style={{
+              padding: "10px 14px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            {/* Title row */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span className="bp-label">
+                LIBRARY ({filteredJobs.length}/{jobs.length})
+              </span>
+              <div style={{ display: "flex", gap: 6 }}>
+                {activeFilterCount > 0 && (
+                  <button
+                    className="btn-ghost"
+                    style={{ height: 22, padding: "0 8px", fontSize: 9 }}
+                    onClick={resetFilters}
+                  >
+                    CLEAR ({activeFilterCount})
+                  </button>
+                )}
+                <button
+                  className="btn-ghost"
+                  style={{ height: 22, padding: "0 8px", fontSize: 9 }}
+                  onClick={fetchJobs}
+                >
+                  ↻
+                </button>
+              </div>
             </div>
-            
-            <input 
-              type="text" 
-              placeholder="Search across all fields..." 
+
+            {/* Search */}
+            <input
+              type="text"
+              placeholder="Search title, company, skills, description..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
               style={inputStyle}
             />
 
-            <div style={{ display: 'flex', gap: 10 }}>
-              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, flex: 1 }}>
-                <option value="">All Statuses</option>
-                <option value="nlp_done">Done (NLP)</option>
+            {/* Row 1: Status + Resume + Applied */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                <option value="">Status</option>
+                <option value="nlp_done">NLP Done</option>
                 <option value="enriched">Enriched</option>
                 <option value="basic">Basic</option>
               </select>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
-                <input 
-                  type="checkbox" 
-                  checked={hasSalaryFilter} 
-                  onChange={e => setHasSalaryFilter(e.target.checked)} 
-                  style={{ accentColor: 'var(--cyan-bright)' }}
-                />
-                Has Pay
-              </label>
+              <select
+                value={resumeFilter}
+                onChange={(e) =>
+                  setResumeFilter(e.target.value as "" | "has" | "none")
+                }
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                <option value="">Resume</option>
+                <option value="has">Has Resume</option>
+                <option value="none">No Resume</option>
+              </select>
+              <select
+                value={appliedFilter}
+                onChange={(e) =>
+                  setAppliedFilter(
+                    e.target.value as "" | "applied" | "not_applied",
+                  )
+                }
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                <option value="">Application</option>
+                <option value="applied">Applied</option>
+                <option value="not_applied">Not Applied</option>
+              </select>
+            </div>
+
+            {/* Row 2: Company + Sort */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                value={companyFilter}
+                onChange={(e) => setCompanyFilter(e.target.value)}
+                style={{ ...selectStyle, flex: 2 }}
+              >
+                <option value="">All Companies</option>
+                {companies.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                <option value="date">Newest</option>
+                <option value="company">Company</option>
+                <option value="title">Title</option>
+                <option value="salary">Salary</option>
+              </select>
+            </div>
+
+            {/* Row 3: Toggle chips */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {(
+                [
+                  [
+                    "hasSalaryFilter",
+                    "HAS PAY",
+                    hasSalaryFilter,
+                    () => setHasSalaryFilter((v) => !v),
+                  ],
+                  [
+                    "hasDescFilter",
+                    "HAS DESC",
+                    hasDescFilter,
+                    () => setHasDescFilter((v) => !v),
+                  ],
+                  [
+                    "hasSkillsFilter",
+                    "HAS SKILLS",
+                    hasSkillsFilter,
+                    () => setHasSkillsFilter((v) => !v),
+                  ],
+                ] as [string, string, boolean, () => void][]
+              ).map(([key, label, active, toggle]) => (
+                <button
+                  key={key}
+                  onClick={toggle}
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    padding: "3px 8px",
+                    height: 22,
+                    cursor: "pointer",
+                    border: `1px solid ${active ? "var(--cyan-bright)" : "var(--line)"}`,
+                    background: active
+                      ? "rgba(43,125,233,0.15)"
+                      : "transparent",
+                    color: active ? "var(--cyan-bright)" : "var(--muted)",
+                  }}
+                >
+                  {active ? "✓ " : ""}
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
-        {/* Job List */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>LOADING...</div>}
-          {!loading && filteredJobs.length === 0 && (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>NO JOBS MATCH YOUR FILTERS</div>
+        {/* Job list */}
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {loading && (
+            <div
+              style={{
+                padding: 24,
+                textAlign: "center",
+                color: "var(--muted)",
+                fontSize: 11,
+              }}
+            >
+              LOADING...
+            </div>
           )}
-          {filteredJobs.map(job => {
-            const isSelected = selectedJobId === job.id
+          {!loading && filteredJobs.length === 0 && (
+            <div
+              style={{
+                padding: 40,
+                textAlign: "center",
+                color: "var(--muted)",
+                fontSize: 11,
+              }}
+            >
+              NO JOBS MATCH YOUR FILTERS
+              {activeFilterCount > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    className="btn-ghost"
+                    style={{ fontSize: 10 }}
+                    onClick={resetFilters}
+                  >
+                    CLEAR FILTERS
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {filteredJobs.map((job) => {
+            const isSel = selectedJobId === job.id;
             return (
-              <div 
+              <div
                 key={job.id}
                 onClick={() => setSelectedJobId(job.id)}
-                className={`library-job-card ${isSelected ? 'selected' : ''}`}
+                className={`library-job-card ${isSel ? "selected" : ""}`}
               >
-                <div style={{ fontWeight: 600, color: isSelected ? 'var(--cyan-bright)' : 'var(--white)', marginBottom: 4, fontSize: 12 }}>
-                  {job.title || 'Untitled'}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    marginBottom: 3,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      color: isSel ? "var(--cyan-bright)" : "var(--white)",
+                      fontSize: 12,
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {job.title || "Untitled"}
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {job.applied && (
+                      <span
+                        style={{
+                          fontSize: 8,
+                          padding: "1px 5px",
+                          background: "rgba(58,201,122,0.12)",
+                          color: "var(--green)",
+                          border: "1px solid var(--green)",
+                          fontWeight: 700,
+                        }}
+                      >
+                        ✓ APPLIED
+                      </span>
+                    )}
+                    {job.project_id && (
+                      <span
+                        style={{
+                          fontSize: 8,
+                          padding: "1px 5px",
+                          background: "rgba(43,125,233,0.12)",
+                          color: "var(--cyan-bright)",
+                          border: "1px solid var(--cyan-bright)",
+                          fontWeight: 700,
+                        }}
+                      >
+                        ✓ RESUME
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div style={{ color: 'var(--white-dim)', fontSize: 11, marginBottom: 4 }}>
-                  {job.company || 'Unknown Company'}
+                <div
+                  style={{
+                    color: "var(--white-dim)",
+                    fontSize: 11,
+                    marginBottom: 5,
+                  }}
+                >
+                  {job.company || "Unknown"}
                 </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span style={{ color: 'var(--muted)', fontSize: 10 }}>{job.location || 'No Location'}</span>
-                  {job.pay && <span style={{ color: 'var(--green)', fontSize: 10, fontWeight: 600 }}>• Has Pay</span>}
-                  <span style={{ 
-                    marginLeft: 'auto', fontSize: 9, padding: '2px 4px', 
-                    background: job.status === 'nlp_done' ? 'rgba(30,165,88,0.1)' : 'transparent',
-                    color: job.status === 'nlp_done' ? 'var(--green)' : 'var(--muted)',
-                    border: `1px solid ${job.status === 'nlp_done' ? 'var(--green)' : 'var(--line)'}`
-                  }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ color: "var(--muted)", fontSize: 10 }}>
+                    {job.location || "No location"}
+                  </span>
+                  {job.pay && (
+                    <span
+                      style={{
+                        color: "var(--green)",
+                        fontSize: 10,
+                        fontWeight: 700,
+                      }}
+                    >
+                      • {job.pay}
+                    </span>
+                  )}
+                  {job.technical_skills?.length > 0 && (
+                    <span style={{ color: "var(--cyan-bright)", fontSize: 9 }}>
+                      • {job.technical_skills.length} skills
+                    </span>
+                  )}
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      fontSize: 8,
+                      padding: "1px 5px",
+                      color:
+                        job.status === "nlp_done"
+                          ? "var(--green)"
+                          : "var(--muted)",
+                      border: `1px solid ${job.status === "nlp_done" ? "var(--green)" : "var(--line)"}`,
+                    }}
+                  >
                     {job.status.toUpperCase()}
                   </span>
                 </div>
               </div>
-            )
+            );
           })}
         </div>
       </div>
 
-      {/* ── Right: Job Detail ─────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: 'var(--bg-panel)' }}>
+      {/* ── Right: Detail ───────────────────────────────────────────────── */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          overflow: "hidden",
+          background: "var(--bg-panel)",
+        }}
+      >
         {selectedJob ? (
-          <div style={{ padding: '24px 32px', maxWidth: 800 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-              <div>
-                <h1 style={{ margin: '0 0 8px 0', fontSize: 24, fontWeight: 700 }}>{selectedJob.title}</h1>
-                <div style={{ fontSize: 14, color: 'var(--cyan-bright)', fontWeight: 600, marginBottom: 4 }}>
-                  {selectedJob.company}
+          <>
+            {/* Sticky header */}
+            <div
+              style={{
+                flexShrink: 0,
+                padding: "18px 28px",
+                borderBottom: "1px solid var(--line)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  gap: 16,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <h1 style={{ margin: "0 0 5px 0", fontSize: 20 }}>
+                    {selectedJob.title}
+                  </h1>
+                  <div
+                    style={{
+                      fontSize: 14,
+                      color: "var(--cyan-bright)",
+                      fontWeight: 600,
+                      marginBottom: 3,
+                    }}
+                  >
+                    {selectedJob.company}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                    {selectedJob.location}
+                    {selectedJob.posted_date &&
+                      ` • Posted ${selectedJob.posted_date}`}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                  {selectedJob.location} • Posted: {selectedJob.posted_date || 'Unknown'}
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    flexShrink: 0,
+                  }}
+                >
+                  <button
+                    className="btn-ghost"
+                    style={{
+                      color: selectedJob.applied
+                        ? "var(--green)"
+                        : "var(--white)",
+                      borderColor: selectedJob.applied
+                        ? "var(--green)"
+                        : "var(--line)",
+                      fontSize: 11,
+                    }}
+                    onClick={() => toggleApplied(selectedJob)}
+                  >
+                    {selectedJob.applied ? "✓ APPLIED" : "MARK APPLIED"}
+                  </button>
+                  <a
+                    href={selectedJob.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ textDecoration: "none" }}
+                  >
+                    <button
+                      className="btn-ghost"
+                      style={{
+                        width: "100%",
+                        justifyContent: "center",
+                        fontSize: 11,
+                      }}
+                    >
+                      OPEN IN INDEED ↗
+                    </button>
+                  </a>
+                  <button
+                    className="btn-ghost"
+                    style={{
+                      color: "var(--red)",
+                      borderColor: "var(--red)",
+                      fontSize: 11,
+                    }}
+                    onClick={() => deleteJob(selectedJob.id)}
+                  >
+                    DELETE JOB
+                  </button>
                 </div>
               </div>
-              <a 
-                href={selectedJob.link} 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                className="btn-primary" 
-                style={{ textDecoration: 'none', display: 'inline-block' }}
-              >
-                OPEN IN INDEED ↗
-              </a>
             </div>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
-              {selectedJob.pay && (
-                <div className="detail-tag" style={{ color: 'var(--green)', borderColor: 'var(--green)', background: 'rgba(30,165,88,0.05)' }}>
-                  💰 {selectedJob.pay}
+            {/* Scrollable body */}
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                padding: "20px 28px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 20,
+              }}
+            >
+              {/* ── Metadata grid ── */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  gap: 1,
+                  border: "1px solid var(--line)",
+                }}
+              >
+                {[
+                  ["Status", selectedJob.status.toUpperCase()],
+                  ["Scrape Session", selectedJob.scrape_session || "—"],
+                  ["Posted", selectedJob.posted_date || "—"],
+                  [
+                    "Added",
+                    selectedJob.created_at
+                      ? new Date(selectedJob.created_at).toLocaleDateString(
+                          "en-GB",
+                        )
+                      : "—",
+                  ],
+                  [
+                    "Min Salary",
+                    selectedJob.min_salary != null
+                      ? `₹${selectedJob.min_salary.toLocaleString()}`
+                      : "—",
+                  ],
+                  [
+                    "Max Salary",
+                    selectedJob.max_salary != null
+                      ? `₹${selectedJob.max_salary.toLocaleString()}`
+                      : "—",
+                  ],
+                  ["Pay (Raw)", selectedJob.pay || "—"],
+                  ["Job ID", selectedJob.id],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: "10px 14px",
+                      background: "var(--bg-input)",
+                      borderRight: "1px solid var(--line-dim)",
+                      borderBottom: "1px solid var(--line-dim)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 9,
+                        color: "var(--muted)",
+                        fontWeight: 700,
+                        letterSpacing: "0.1em",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {label}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--white)",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Pay tags + metadata chips ── */}
+              {(selectedJob.pay ||
+                selectedJob.metadata?.length > 0 ||
+                selectedJob.raw_attributes?.length > 0) && (
+                <div>
+                  <div className="bp-label" style={{ marginBottom: 8 }}>
+                    JOB ATTRIBUTES
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {selectedJob.pay && (
+                      <span
+                        className="detail-tag"
+                        style={{
+                          color: "var(--green)",
+                          borderColor: "var(--green)",
+                          background: "rgba(30,165,88,0.05)",
+                        }}
+                      >
+                        {selectedJob.pay}
+                      </span>
+                    )}
+                    {selectedJob.metadata?.map((m, i) => (
+                      <span key={`m-${i}`} className="detail-tag">
+                        {m}
+                      </span>
+                    ))}
+                    {selectedJob.raw_attributes?.map((r, i) => (
+                      <span
+                        key={`r-${i}`}
+                        className="detail-tag"
+                        style={{
+                          color: "var(--white-dim)",
+                          borderColor: "var(--line)",
+                        }}
+                      >
+                        {r}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
-              {selectedJob.metadata && selectedJob.metadata.map((m, i) => (
-                <div key={i} className="detail-tag">{m}</div>
-              ))}
-            </div>
 
-            {selectedJob.technical_skills && selectedJob.technical_skills.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <div className="bp-label" style={{ marginBottom: 8 }}>TECHNICAL SKILLS</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {selectedJob.technical_skills.map(s => (
-                    <span key={s} className="skill-chip">{s}</span>
-                  ))}
+              {/* ── Snippet ── */}
+              {selectedJob.snippet?.length > 0 && (
+                <div>
+                  <div className="bp-label" style={{ marginBottom: 8 }}>
+                    SNIPPET
+                  </div>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 4 }}
+                  >
+                    {selectedJob.snippet.map((s, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          fontSize: 12,
+                          color: "var(--white-dim)",
+                          lineHeight: 1.5,
+                          padding: "6px 12px",
+                          background: "var(--bg-input)",
+                          borderLeft: "2px solid var(--cyan-dim)",
+                        }}
+                      >
+                        {s}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Technical Skills ── */}
+              {selectedJob.technical_skills?.length > 0 && (
+                <div>
+                  <div className="bp-label" style={{ marginBottom: 8 }}>
+                    TECHNICAL SKILLS ({selectedJob.technical_skills.length})
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {selectedJob.technical_skills.map((s) => (
+                      <span key={s} className="skill-chip">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Resume ── */}
+              <div
+                style={{
+                  padding: "14px 18px",
+                  border: "1px solid var(--line)",
+                  background: "var(--bg-input)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: selectedJob.project_id ? 12 : 0,
+                  }}
+                >
+                  <span className="bp-label">GENERATED RESUME</span>
+                  {selectedJob.project_id && (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {bestArtifact && (
+                        <a
+                          href={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}`}
+                          download={bestArtifact.file_name}
+                          style={{ textDecoration: "none" }}
+                        >
+                          <button
+                            className="btn-ghost"
+                            style={{
+                              height: 26,
+                              padding: "0 10px",
+                              fontSize: 10,
+                            }}
+                          >
+                            ↓ DOWNLOAD PDF
+                          </button>
+                        </a>
+                      )}
+                      <button
+                        className="btn-ghost"
+                        style={{
+                          height: 26,
+                          padding: "0 10px",
+                          fontSize: 10,
+                          color: "var(--red)",
+                          borderColor: "var(--red)",
+                        }}
+                        onClick={() => deleteResume(selectedJob)}
+                      >
+                        DELETE RESUME
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {!selectedJob.project_id && (
+                  <div style={{ color: "var(--muted)", fontSize: 11 }}>
+                    No resume generated. Use Batch Processing or the Generate
+                    page.
+                  </div>
+                )}
+                {selectedJob.project_id && artifactsLoading && (
+                  <div style={{ color: "var(--muted)", fontSize: 11 }}>
+                    Loading...
+                  </div>
+                )}
+                {selectedJob.project_id &&
+                  !artifactsLoading &&
+                  artifacts.length === 0 && (
+                    <div style={{ color: "var(--yellow)", fontSize: 11 }}>
+                      Project linked but no artifacts (generation may have
+                      failed).
+                    </div>
+                  )}
+                {selectedJob.project_id &&
+                  !artifactsLoading &&
+                  artifacts.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 5,
+                      }}
+                    >
+                      <select
+                        onChange={(e) => {
+                          const a = artifacts.find(
+                            (x) => x.id.toString() === e.target.value,
+                          );
+                          if (a) {
+                            const link = document.createElement("a");
+                            link.href = `${API}/artifacts/download?path=${encodeURIComponent(
+                              a.storage_path,
+                            )}`;
+                            link.download = a.file_name;
+                            link.click();
+                            e.target.value = "";
+                          }
+                        }}
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "var(--white)",
+                          background: "var(--bg-panel)",
+                          border: "1px solid var(--line-dim)",
+                          padding: "6px 8px",
+                          height: 30,
+                          outline: "none",
+                          width: "100%",
+                          borderRadius: 0,
+                          cursor: "pointer",
+                        }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>
+                          Select an artifact to download...
+                        </option>
+                        {artifacts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.file_name}{" "}
+                            {a.size_bytes
+                              ? `(${Math.round(a.size_bytes / 1024)} KB)`
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* PDF Preview */}
+                      {bestArtifact && (
+                        <div
+                          style={{
+                            marginTop: 12,
+                            borderTop: "1px solid var(--line)",
+                            paddingTop: 12,
+                          }}
+                        >
+                          <div className="bp-label" style={{ marginBottom: 8 }}>
+                            PREVIEW
+                          </div>
+                          <iframe
+                            src={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}`}
+                            style={{
+                              width: "100%",
+                              height: "500px",
+                              border: "1px solid var(--line)",
+                              background: "var(--bg)",
+                            }}
+                            title="Resume Preview"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+              </div>
+
+              {/* ── Full Description ── */}
+              <div>
+                <div className="bp-label" style={{ marginBottom: 10 }}>
+                  FULL DESCRIPTION
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--white)",
+                    lineHeight: 1.7,
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "system-ui, -apple-system, sans-serif",
+                  }}
+                >
+                  {selectedJob.description || (
+                    <span style={{ color: "var(--muted)" }}>
+                      No description (Phase 2 scrape required).
+                    </span>
+                  )}
                 </div>
               </div>
-            )}
-
-            <div style={{ height: 1, background: 'var(--line)', margin: '24px 0' }} />
-
-            <div>
-              <div className="bp-label" style={{ marginBottom: 12 }}>FULL DESCRIPTION</div>
-              <div style={{ 
-                fontSize: 13, 
-                color: 'var(--white)', 
-                lineHeight: 1.6, 
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'system-ui, -apple-system, sans-serif'
-              }}>
-                {selectedJob.description || <span style={{ color: 'var(--muted)' }}>No description available (Phase 2 required).</span>}
-              </div>
             </div>
-            
-            <div style={{ marginTop: 40, paddingTop: 20, borderTop: '1px solid var(--line)', fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
-              JOB ID: {selectedJob.id} • SESSION: {selectedJob.scrape_session} • STATUS: {selectedJob.status.toUpperCase()}
-            </div>
-          </div>
+          </>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', fontSize: 12 }}>
-            {jobs.length > 0 ? 'SELECT A JOB TO VIEW DETAILS' : 'NO SCRAPED JOBS YET'}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              color: "var(--muted)",
+              fontSize: 12,
+            }}
+          >
+            {jobs.length > 0
+              ? "SELECT A JOB TO VIEW DETAILS"
+              : "NO SCRAPED JOBS YET"}
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono)',
+  fontFamily: "var(--font-mono)",
   fontSize: 11,
   fontWeight: 600,
-  color: 'var(--white)',
-  background: 'var(--bg-input)',
-  border: '1px solid var(--line)',
-  padding: '6px 8px',
-  height: 32,
-  outline: 'none',
-  width: '100%',
+  color: "var(--white)",
+  background: "var(--bg-input)",
+  border: "1px solid var(--line)",
+  padding: "6px 8px",
+  height: 30,
+  outline: "none",
+  width: "100%",
   borderRadius: 0,
-}
-
+};
 const selectStyle: React.CSSProperties = {
   ...inputStyle,
-  cursor: 'pointer',
-  appearance: 'none',
-  WebkitAppearance: 'none',
+  cursor: "pointer",
+  appearance: "none",
+  WebkitAppearance: "none",
   backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236a9cc8'/%3E%3C/svg%3E")`,
-  backgroundRepeat: 'no-repeat',
-  backgroundPosition: 'right 8px center',
-  paddingRight: '24px',
-}
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 8px center",
+  paddingRight: "24px",
+};

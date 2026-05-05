@@ -103,6 +103,8 @@ class LocalBackend:
                 raw_attributes TEXT NOT NULL DEFAULT '[]',
                 scrape_session TEXT NOT NULL DEFAULT '',
                 status         TEXT NOT NULL DEFAULT 'basic',
+                project_id     TEXT DEFAULT '',
+                applied        INTEGER DEFAULT 0,
                 created_at     TEXT NOT NULL
             );
             """
@@ -112,6 +114,24 @@ class LocalBackend:
         try:
             self.conn.execute(
                 "ALTER TABLE profiles ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
+            
+        # Live migration: add project_id if the DB was created before this column existed.
+        try:
+            self.conn.execute(
+                "ALTER TABLE scraped_jobs ADD COLUMN project_id TEXT DEFAULT ''"
+            )
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Live migration: add applied if the DB was created before this column existed.
+        try:
+            self.conn.execute(
+                "ALTER TABLE scraped_jobs ADD COLUMN applied INTEGER DEFAULT 0"
             )
             self.conn.commit()
         except Exception:
@@ -421,7 +441,6 @@ class LocalBackend:
     # ── Scraped Jobs CRUD ─────────────────────────────────────────────────────
 
     def upsert_scraped_job(self, job: dict[str, Any]) -> None:
-        """Insert or update a single scraped job row."""
         now = _now_iso()
         self.conn.execute(
             """
@@ -430,8 +449,8 @@ class LocalBackend:
                 min_salary, max_salary, posted_date,
                 metadata, snippet, description,
                 technical_skills, raw_attributes,
-                scrape_session, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                scrape_session, status, project_id, applied, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 company = excluded.company,
@@ -447,10 +466,12 @@ class LocalBackend:
                 technical_skills = excluded.technical_skills,
                 raw_attributes = excluded.raw_attributes,
                 scrape_session = excluded.scrape_session,
-                status = excluded.status
+                status = excluded.status,
+                project_id = excluded.project_id,
+                applied = excluded.applied
             """,
             (
-                job.get("id", ""),
+                job.get("id"),
                 job.get("title", ""),
                 job.get("company", ""),
                 job.get("location", ""),
@@ -466,6 +487,8 @@ class LocalBackend:
                 json.dumps(job.get("raw_attributes", []), ensure_ascii=False),
                 job.get("scrape_session", ""),
                 job.get("status", "basic"),
+                job.get("project_id", ""),
+                job.get("applied", 0),
                 now,
             ),
         )
@@ -484,7 +507,7 @@ class LocalBackend:
                    min_salary, max_salary, posted_date,
                    metadata, snippet, description,
                    technical_skills, raw_attributes,
-                   scrape_session, status, created_at
+                   scrape_session, status, project_id, applied, created_at
             FROM scraped_jobs
             ORDER BY created_at DESC
             """
@@ -508,9 +531,19 @@ class LocalBackend:
                 "raw_attributes": json.loads(row["raw_attributes"] or "[]"),
                 "scrape_session": str(row["scrape_session"]),
                 "status": str(row["status"]),
+                "project_id": str(row["project_id"] or ""),
+                "applied": bool(row["applied"]),
                 "created_at": _safe_dt(row["created_at"]),
             })
         return result
+
+    def set_job_applied(self, job_id: str, applied: bool) -> None:
+        """Mark a job as applied or not applied."""
+        self.conn.execute(
+            "UPDATE scraped_jobs SET applied = ? WHERE id = ?",
+            (1 if applied else 0, job_id)
+        )
+        self.conn.commit()
 
     def delete_scraped_jobs(self, ids: list[str]) -> None:
         """Delete scraped jobs by ID."""
@@ -519,6 +552,14 @@ class LocalBackend:
         placeholders = ",".join("?" for _ in ids)
         self.conn.execute(
             f"DELETE FROM scraped_jobs WHERE id IN ({placeholders})", ids
+        )
+        self.conn.commit()
+
+    def link_job_to_project(self, job_id: str, project_id: str) -> None:
+        """Update the project_id for a scraped job."""
+        self.conn.execute(
+            "UPDATE scraped_jobs SET project_id = ? WHERE id = ?",
+            (project_id, job_id),
         )
         self.conn.commit()
 

@@ -311,7 +311,20 @@ class ScrapeService:
         # ── PHASE 1: Basic scrape ─────────────────────────────────────────────
         all_jobs: list[dict] = []
         
+        # Load existing job IDs from the database to avoid re-scraping
+        existing_jobs = self._backend.list_scraped_jobs()
+        db_seen_ids = {j["id"] for j in existing_jobs if "id" in j}
+        
         if is_single_job_direct and single_job_id:
+            if single_job_id in db_seen_ids:
+                self._log("=" * 50, "event")
+                self._log(f"SKIPPING — Direct job {single_job_id} already exists in database.", "event")
+                self._log("=" * 50, "event")
+                self.status.state = "completed"
+                self.status.phase = "Completed"
+                self.status.progress = "0 jobs processed (already exists)"
+                return
+
             self._log("=" * 50, "event")
             self._log(f"SKIPPING PHASE 1 — Direct single job link detected ({single_job_id})", "event")
             self._log("=" * 50, "event")
@@ -429,6 +442,8 @@ class ScrapeService:
                 new_jobs = []
                 for j in jobs_on_page:
                     jid = j.get("id")
+                    if jid and jid in db_seen_ids:
+                        continue  # Skip already scraped jobs
                     if jid and jid not in seen_ids:
                         seen_ids.add(jid)
                         new_jobs.append(j)
@@ -458,12 +473,10 @@ class ScrapeService:
             self._log(f"Phase 1 complete. {len(all_jobs)} basic records.", "success")
             self.status.total_jobs = len(all_jobs)
 
-            # Persist Phase 1
+            # Initialize session details for all basic jobs
             for j in all_jobs:
                 j["scrape_session"] = session_id
                 j["status"] = "basic"
-            self._backend.upsert_scraped_jobs(all_jobs)
-            self._log("Phase 1 results saved to DB.", "success")
 
             if self._stop_event.is_set():
                 self.status.state = "stopped"
@@ -544,14 +557,13 @@ class ScrapeService:
                 job.update(details)
                 job["status"] = "enriched"
                 enriched_jobs.append(job)
+                
+                # Incrementally save to DB so UI updates during the long Phase 2
+                self._backend.upsert_scraped_job(job)
 
             all_jobs = enriched_jobs
             self.status.enriched_jobs = len(all_jobs)
             self._log(f"Phase 2 complete. {len(all_jobs)} enriched, {dropped} dropped.", "success")
-
-            # Persist Phase 2
-            self._backend.upsert_scraped_jobs(all_jobs)
-            self._log("Phase 2 results saved to DB.", "success")
 
         # Session closed — browser no longer needed
 
@@ -592,12 +604,11 @@ class ScrapeService:
                 job["technical_skills"] = filter_technical_skills(raw_attrs)
 
             job["status"] = "nlp_done"
+            
+            # Save immediately so UI updates incrementally
+            self._backend.upsert_scraped_job(job)
 
         self._log("Phase 3 complete. NLP enrichment done.", "success")
-
-        # Persist Phase 3
-        self._backend.upsert_scraped_jobs(all_jobs)
-        self._log("Phase 3 results saved to DB.", "success")
 
         self.status.state = "completed"
         self.status.phase = "Completed"

@@ -7,7 +7,7 @@ Usage:
 Optional flags:
     --jd    <path>  Job description file     (default: input/job_description.txt)
     --data  <path>  Master profile JSON       (default: input/truth.json)
-    --max-iterations <n>                      (default: 10)
+    --max-iterations <n>                      (default: 5, hard cap: 5)
     --job-label <name>                        (optional, skips prompt)
     --model <provider/model-id>               (optional runtime model override)
     --api-key-env <ENV_VAR>                   (optional API key env override)
@@ -52,7 +52,7 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 import os  # noqa: E402
 
-from pypdf import PdfReader  # noqa: E402
+from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 from schemas.resume_schema import TailoredResume  # noqa: E402
 from src.resumer.tools.pdf_tools import set_shared_state  # noqa: E402
@@ -100,6 +100,7 @@ def _banner(msg: str) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # project root
+MAX_SHORTENING_ITERATIONS = 5
 
 
 def _sanitize_folder_name(name: str) -> str:
@@ -107,6 +108,20 @@ def _sanitize_folder_name(name: str) -> str:
     name = name.lower().strip()
     name = re.sub(r"[^a-z0-9]+", "_", name)
     return name.strip("_")
+
+
+def _sanitize_max_iterations(value: int) -> int:
+    return max(1, min(MAX_SHORTENING_ITERATIONS, value))
+
+
+def _write_single_page_pdf(source_pdf: Path, output_pdf: Path) -> None:
+    reader = PdfReader(str(source_pdf))
+    if not reader.pages:
+        raise ValueError(f"Source PDF has no pages: {source_pdf}")
+    writer = PdfWriter()
+    writer.add_page(reader.pages[0])
+    with output_pdf.open("wb") as fh:
+        writer.write(fh)
 
 
 def _extract_json_object(raw_text: str) -> str:
@@ -424,8 +439,8 @@ def main() -> None:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=10,
-        help="Max feedback-loop iterations",
+        default=MAX_SHORTENING_ITERATIONS,
+        help=f"Max feedback-loop iterations (hard cap: {MAX_SHORTENING_ITERATIONS})",
     )
     parser.add_argument(
         "--job-label",
@@ -475,6 +490,12 @@ def main() -> None:
         help="List of words that MUST be included word-for-word",
     )
     args = parser.parse_args()
+    requested_max_iterations = args.max_iterations
+    args.max_iterations = _sanitize_max_iterations(args.max_iterations)
+    if requested_max_iterations != args.max_iterations:
+        _warn(
+            f"Requested max iterations ({requested_max_iterations}) exceeded the cap. Using {args.max_iterations}."
+        )
 
     if args.model.strip():
         os.environ["RESUMER_MODEL"] = args.model.strip()
@@ -559,6 +580,7 @@ def main() -> None:
 
     MAX_RUN_ATTEMPTS = 3
     final_success = False
+    overflow_limit_reached = False
 
     for run_attempt in range(1, MAX_RUN_ATTEMPTS + 1):
         if run_attempt > 1:
@@ -567,7 +589,6 @@ def main() -> None:
             )
 
         crew_instance = ResumerCrew()
-        final_result = None
         current_json = ""
         overflow_lines = 0
 
@@ -664,7 +685,7 @@ def main() -> None:
                         f"Iteration {iteration}: UNDERFLOW (Content height: {content_height}px / ~1122px). Too much empty space."
                     )
                     _warn("Discarding this run and restarting completely...")
-                    break  # Break out to trigger next run_attempt
+                    break
                 final_success = True
                 _ok(
                     f"Iteration {iteration}: Resume fits perfectly on 1 page! ✅ (Content height: {content_height}px)"
@@ -679,23 +700,19 @@ def main() -> None:
             _warn(
                 f"Reached max iterations ({args.max_iterations}) without fitting on 1 page."
             )
+            overflow_limit_reached = True
 
         if final_success:
+            break
+        if overflow_limit_reached:
             break
 
     # ── Post-process result ──────────────────────────────────────────────
     _step(4, "Wrapping up…")
+    pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
 
     # ── Find and copy final PDF ──────────────────────────────────────────
-    if not final_success:
-        _err(
-            f"All {MAX_RUN_ATTEMPTS} attempts produced underflow or failed to fit on 1 page."
-        )
-        _err(
-            "No final resume was produced. Try adjusting the job description or profile data."
-        )
-    else:
-        pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
+    if final_success:
         if pdf_candidates:
             best_pdf = pdf_candidates[-1]
             page_count = len(PdfReader(str(best_pdf)).pages)
@@ -715,6 +732,31 @@ def main() -> None:
         else:
             _warn("No PDF drafts found in output folder.")
             _warn("The crew may not have used the compile_pdf tool.")
+    elif overflow_limit_reached and pdf_candidates:
+        best_pdf = pdf_candidates[-1]
+        page_count = len(PdfReader(str(best_pdf)).pages)
+        final = output_dir / "final_resume.pdf"
+
+        if page_count > 1:
+            _warn(
+                f"Still {page_count} pages after {args.max_iterations} iterations. Keeping only page 1 in final output."
+            )
+            _write_single_page_pdf(best_pdf, final)
+            _ok(f"Final resume (first page only) → {final.resolve()}")
+        else:
+            shutil.copy2(best_pdf, final)
+            _ok(f"Final resume → {final.resolve()}")
+
+        best_md = best_pdf.with_suffix(".md")
+        if best_md.exists():
+            shutil.copy2(best_md, output_dir / "final_resume.md")
+    elif not final_success:
+        _err(
+            f"All {MAX_RUN_ATTEMPTS} attempts produced underflow or failed to fit on 1 page."
+        )
+        _err(
+            "No final resume was produced. Try adjusting the job description or profile data."
+        )
 
     print()
     _ok("Done!")

@@ -1,0 +1,170 @@
+{
+  "personal_information": {
+    "name": "Aryan Singh",
+    "phone": "+91 95183 07223",
+    "location": "Nitte, Udupi, Karnataka 574110",
+    "email": "justaryansingh05@gmail.com",
+    "linkedin": "linkedin.com/in/justaryansingh/",
+    "github": "github.com/Wizhill05"
+  },
+  "photo": {
+    "link": "https://vsqtw0cqfv.ufs.sh/f/XcqjDZV6NpEuVZYSMs4agDIM4yanK6ENRHQzoushYqTXmwPl"
+  },
+  "education": [
+    {
+      "degree": "BTech in AI & Machine Learning",
+      "institution": "NMAMIT, Nitte",
+      "duration": "June 2023 - Present",
+      "coursework": [
+        "NLP",
+        "Reinforcement Learning",
+        "Computer Vision",
+        "DBMS",
+        "Data Structures",
+        "Networking and Cummunications"
+      ]
+    }
+  ],
+  "skills": {
+    "programming_languages": [
+      "Python",
+      "CUDA C++",
+      "SQL",
+      "Dart",
+      "Java",
+      "Javascript"
+    ],
+    "deep_learning_and_ai": [
+      "PyTorch",
+      "TensorFlow",
+      "Gemini/OpenAI APIs",
+      "ollama",
+      "LMStudio",
+      "NLP"
+    ],
+    "agentic ai": ["MCP Servers", "pydantic", "CrewAI", "LangGraph"],
+
+    "machine_learning_and_data": [
+      "NumPy",
+      "Pandas",
+      "Prompt Engg.",
+      "Agentic AI",
+      "Text/Data Processing"
+    ],
+
+    "database management and web services": [
+      "postgres",
+      "MySQL",
+      "Prisma",
+      "AWS",
+      "Supabase"
+    ],
+    "web_and_app_dev": ["React", "Flutter", "NextJS", "VPS Hosting", "CDNs"],
+    "Graphics and Web Design": [
+      "Figma",
+      "Illustrator",
+      "Photoshop",
+      "Tailwind"
+    ],
+
+    "spoken_languages": ["English", "Hindi"]
+  },
+  "projects": [
+    {
+      "name": "LaunchYourLLM - DBMS",
+      "technologies": ["DBMS", "MySQL", "LMStudio"],
+      "description": "A Context Management System for Running LLMS Locally on device using LMStudio. Uses MySQL Database to manage Different Context Windows or \"chats\" with a credit based Multi-User Management system which can be deployed to the whole world or in a private controlled environment.",
+      "numerical data": [
+        "Supports over 100+ Unique LLMs that you can deploy.",
+        "improves the efficiency of token usage by a huge 50% margin."
+      ],
+      "link": "github.com/Wizhill05/LaunchYourLLM"
+    },
+    {
+      "name": "Graxy - CUDA",
+      "technologies": ["C++", "CUDA", "ImGui"],
+      "description": "A real-time GPU-accelerated math function visualizer in C++/CUDA parallelizing computation across 777,600 pixels (1080x720) using 256 CUDA threads per block (16x16), with an ImGui overlay for live control.",
+      "numerical data": [
+        "Around 85% Faster then direct CPU Rendering according to my tests. "
+      ],
+      "link": "github.com/Wizhill05/Graxy"
+    },
+    {
+      "name": "Beep Boop - Agentic AI",
+      "technologies": ["Flutter", "Natural Language Processing", "Tensorflow"],
+      "description": "Flutter Application that takes Voice Commands and uses Natural Language Processing to classify and act accordingly. Uses a Locally running Tensorflow Model trained on a Fully Custom Dataset of over 10,000 commands ranging from \"Set an alarm\" to \"Add 100 and 40\" and many more.",
+      "numerical data": [
+        "Made a fully custom dataset of 10,000+ commands to train the model"
+      ],
+      "link": "github.com/Wizhill05/beep_boop"
+    },
+    {
+      "name": "Blue Ribbon - App Development",
+      "technologies": ["Flutter", "Supabase", "NLP"],
+      "description": "This Flutter application is designed to assist individuals with dyslexia in reading and comprehending text more effectively. The app uses advanced APIs and a user-friendly interface to simplify text presentation, making reading a smoother and more engaging experience.",
+      "numerical data": [
+        "Tested Across 100+ users",
+        "Improved Reading accuracy for Dislexic People by 70%"
+      ],
+      "link": "github.com/Wizhill05/Blue_Ribbon"
+    }
+  ],
+  "experience": [
+    {
+      "role": "Technical Team",
+      "organization": "Incridea, NMAMIT",
+      "location": "Nitte",
+      "duration": "Jan 2025 Feb 2025",
+      "technologies": ["React-three-fiber", "NextJS"],
+      "responsibilities": [
+        "Implemented a 3D Environment for showcasing Artists (Pronites) using React-three-fiber with all self-made custom 3D assets."
+      ],
+      "numerical data": "Worked with a Team of 20 People to make a Web Application with 5000+ of daily users for event registrations and quiz management for over 40 events during college fest."
+    },
+    {
+      "role": "Full Stack Developer",
+      "organization": "Freelance",
+      "location": "Manipal",
+      "duration": "Oct 2025 to Jan 2026",
+      "technologies": ["NextJS", "Hostinger VPS", "Supabase", "Razorpay"],
+      "responsibilities": [
+        "Made a fully custom College admissions website which helped many students compare and select multiple colleges.",
+        "single handedly Implemented frontend, backend, payment gateways, and database"
+      ],
+      "numerical data": "had a total of 500+ users over a period of 3 months and collaberated with 10+ colleges"
+    },
+    {
+      "role": "Web Designer",
+      "organization": "Cognimuse",
+      "location": "Bangalore - Remote",
+      "duration": "Oct 2024 to Jan 2025",
+      "technologies": ["Figma", "Illustrator"],
+      "responsibilities": [
+        "Shipped Multiple projects to Indian and International Clients",
+        "Worked with a team of 5 with daily review meetings",
+        "Made Graphic Elements, Prototyped Websites, Collaberated with the development team to explain details and microinterations needed"
+      ],
+      "numerical data": "worked on a total of 3 projects"
+    },
+    {
+      "role": "Graphics Designer",
+      "organization": "Finite Loop Club",
+      "location": "NMAMIT, Nitte",
+      "duration": "June 2024 to Present",
+      "technologies": ["Photoshop", "Illustrator", "Figma"],
+      "responsibilities": [
+        "Lead a team of 12 to design event posters, prints, and digital content.",
+        "Made 40+ unique posters for a wide variety of events",
+        "Managed design workload for Bigger Projects including multiple National Level Hackathons"
+      ],
+      "numerical data": "lead a team of 12, made 40+ posters"
+    }
+  ],
+  "Acheivements": [
+    "2024 | Team Lead, Winner | HackNight 2024, SCEM, Mangalore",
+    "2026 | Team Lead, Best AI Agent | Flinders University AI Competition, Mangalore"
+  ],
+  "Other Skills": [
+    "Good Public Speaking skills, given multiple workshops in different colleges and environments"
+  ]
+}

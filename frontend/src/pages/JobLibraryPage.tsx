@@ -33,6 +33,36 @@ interface Artifact {
   size_bytes: number | null;
 }
 
+const FALLBACK_DOWNLOAD_NAME = "resume";
+
+function sanitizeFileNamePart(value: string, fallback: string): string {
+  const cleaned = value
+    .trim()
+    .replace(/[<>:"/\\|?*]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\.+$/g, "")
+    .trim();
+  return cleaned || fallback;
+}
+
+function getArtifactExtension(artifact: Artifact): string {
+  const fromName = artifact.file_name.match(/(\.[a-zA-Z0-9]+)$/)?.[1];
+  if (fromName) return fromName.toLowerCase();
+  if (artifact.mime_type === "application/pdf") return ".pdf";
+  if (artifact.mime_type === "text/markdown") return ".md";
+  return "";
+}
+
+function getJobDownloadFileName(job: ScrapedJob, artifact: Artifact): string {
+  const title = sanitizeFileNamePart(job.title || "", "job");
+  const company = sanitizeFileNamePart(job.company || "", "company");
+  const extension = getArtifactExtension(artifact);
+  return sanitizeFileNamePart(
+    `${title} - ${company}${extension}`,
+    `${FALLBACK_DOWNLOAD_NAME}${extension}`,
+  );
+}
+
 export default function JobLibraryPage() {
   const [jobs, setJobs] = useState<ScrapedJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -887,7 +917,10 @@ export default function JobLibraryPage() {
                       {bestArtifact && (
                         <a
                           href={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}`}
-                          download={bestArtifact.file_name}
+                          download={getJobDownloadFileName(
+                            selectedJob,
+                            bestArtifact,
+                          )}
                           style={{ textDecoration: "none" }}
                         >
                           <button
@@ -957,7 +990,10 @@ export default function JobLibraryPage() {
                             link.href = `${API}/artifacts/download?path=${encodeURIComponent(
                               a.storage_path,
                             )}`;
-                            link.download = a.file_name;
+                            link.download = getJobDownloadFileName(
+                              selectedJob,
+                              a,
+                            );
                             link.click();
                             e.target.value = "";
                           }

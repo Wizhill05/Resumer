@@ -56,11 +56,12 @@
 
 ## PROJECTS
 {% for project in resume.projects %}
+{% set project_link = (project.link or '') | trim %}
 
-{% if project.github_path and project.link %}
-**{{ project.name }}** | [{{ project.github_path }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
-{% elif project.link %}
-**{{ project.name }}** | [{{ project.link | replace('https://', '') | replace('http://', '') | replace('www.', '') }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
+{% if project.github_path and project_link %}
+**{{ project.name }}** | [{{ project.github_path }}]({{ project_link if project_link.startswith('http') else 'https://' + project_link }})
+{% elif project_link %}
+**{{ project.name }}** | [{{ project_link | replace('https://', '') | replace('http://', '') | replace('www.', '') }}]({{ project_link if project_link.startswith('http') else 'https://' + project_link }})
 {% else %}
 **{{ project.name }}**
 {% endif %}

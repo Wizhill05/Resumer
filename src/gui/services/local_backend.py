@@ -101,6 +101,13 @@ class LocalBackend:
                 description    TEXT NOT NULL DEFAULT '',
                 technical_skills TEXT NOT NULL DEFAULT '[]',
                 raw_attributes TEXT NOT NULL DEFAULT '[]',
+                analysis_applying_for TEXT NOT NULL DEFAULT '',
+                analysis_required_skills TEXT NOT NULL DEFAULT '[]',
+                analysis_preferred_skills TEXT NOT NULL DEFAULT '[]',
+                analysis_key_responsibilities TEXT NOT NULL DEFAULT '[]',
+                analysis_keywords TEXT NOT NULL DEFAULT '[]',
+                analysis_experience_years INTEGER,
+                analysis_seniority_level TEXT NOT NULL DEFAULT '',
                 scrape_session TEXT NOT NULL DEFAULT '',
                 status         TEXT NOT NULL DEFAULT 'basic',
                 project_id     TEXT DEFAULT '',
@@ -118,6 +125,22 @@ class LocalBackend:
             self.conn.commit()
         except Exception:
             pass  # Column already exists
+
+        # Live migration: add job analysis fields if the DB was created earlier.
+        for stmt in (
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_applying_for TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_required_skills TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_preferred_skills TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_key_responsibilities TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_keywords TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_experience_years INTEGER",
+            "ALTER TABLE scraped_jobs ADD COLUMN analysis_seniority_level TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                self.conn.execute(stmt)
+                self.conn.commit()
+            except Exception:
+                pass  # Column already exists
             
         # Live migration: add project_id if the DB was created before this column existed.
         try:
@@ -320,7 +343,7 @@ class LocalBackend:
         output_files = [
             p
             for p in output_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in {".pdf", ".md"}
+            if p.is_file() and p.suffix.lower() in {".pdf", ".md", ".json"}
         ]
         output_files.sort(key=lambda p: p.stat().st_mtime)
 
@@ -449,8 +472,12 @@ class LocalBackend:
                 min_salary, max_salary, posted_date,
                 metadata, snippet, description,
                 technical_skills, raw_attributes,
+                analysis_applying_for, analysis_required_skills,
+                analysis_preferred_skills, analysis_key_responsibilities,
+                analysis_keywords, analysis_experience_years,
+                analysis_seniority_level,
                 scrape_session, status, project_id, applied, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 company = excluded.company,
@@ -465,6 +492,13 @@ class LocalBackend:
                 description = excluded.description,
                 technical_skills = excluded.technical_skills,
                 raw_attributes = excluded.raw_attributes,
+                analysis_applying_for = excluded.analysis_applying_for,
+                analysis_required_skills = excluded.analysis_required_skills,
+                analysis_preferred_skills = excluded.analysis_preferred_skills,
+                analysis_key_responsibilities = excluded.analysis_key_responsibilities,
+                analysis_keywords = excluded.analysis_keywords,
+                analysis_experience_years = excluded.analysis_experience_years,
+                analysis_seniority_level = excluded.analysis_seniority_level,
                 scrape_session = excluded.scrape_session,
                 status = excluded.status,
                 project_id = excluded.project_id,
@@ -485,6 +519,13 @@ class LocalBackend:
                 job.get("description", ""),
                 json.dumps(job.get("technical_skills", []), ensure_ascii=False),
                 json.dumps(job.get("raw_attributes", []), ensure_ascii=False),
+                str(job.get("applying_for", "")),
+                json.dumps(job.get("required_skills", []), ensure_ascii=False),
+                json.dumps(job.get("preferred_skills", []), ensure_ascii=False),
+                json.dumps(job.get("key_responsibilities", []), ensure_ascii=False),
+                json.dumps(job.get("keywords", []), ensure_ascii=False),
+                job.get("experience_years"),
+                str(job.get("seniority_level", "")),
                 job.get("scrape_session", ""),
                 job.get("status", "basic"),
                 job.get("project_id", ""),
@@ -507,6 +548,10 @@ class LocalBackend:
                    min_salary, max_salary, posted_date,
                    metadata, snippet, description,
                    technical_skills, raw_attributes,
+                   analysis_applying_for, analysis_required_skills,
+                   analysis_preferred_skills, analysis_key_responsibilities,
+                   analysis_keywords, analysis_experience_years,
+                   analysis_seniority_level,
                    scrape_session, status, project_id, applied, created_at
             FROM scraped_jobs
             ORDER BY created_at DESC
@@ -529,6 +574,17 @@ class LocalBackend:
                 "description": str(row["description"]),
                 "technical_skills": json.loads(row["technical_skills"] or "[]"),
                 "raw_attributes": json.loads(row["raw_attributes"] or "[]"),
+                "applying_for": str(row["analysis_applying_for"] or ""),
+                "required_skills": json.loads(row["analysis_required_skills"] or "[]"),
+                "preferred_skills": json.loads(
+                    row["analysis_preferred_skills"] or "[]"
+                ),
+                "key_responsibilities": json.loads(
+                    row["analysis_key_responsibilities"] or "[]"
+                ),
+                "keywords": json.loads(row["analysis_keywords"] or "[]"),
+                "experience_years": row["analysis_experience_years"],
+                "seniority_level": str(row["analysis_seniority_level"] or ""),
                 "scrape_session": str(row["scrape_session"]),
                 "status": str(row["status"]),
                 "project_id": str(row["project_id"] or ""),
@@ -536,6 +592,85 @@ class LocalBackend:
                 "created_at": _safe_dt(row["created_at"]),
             })
         return result
+
+    def update_job_analysis_by_project_id(
+        self, *, project_id: str, analysis: dict[str, Any]
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE scraped_jobs
+            SET analysis_applying_for = ?,
+                analysis_required_skills = ?,
+                analysis_preferred_skills = ?,
+                analysis_key_responsibilities = ?,
+                analysis_keywords = ?,
+                analysis_experience_years = ?,
+                analysis_seniority_level = ?
+            WHERE project_id = ?
+            """,
+            (
+                str(analysis.get("applying_for", "")),
+                json.dumps(analysis.get("required_skills", []), ensure_ascii=False),
+                json.dumps(analysis.get("preferred_skills", []), ensure_ascii=False),
+                json.dumps(
+                    analysis.get("key_responsibilities", []), ensure_ascii=False
+                ),
+                json.dumps(analysis.get("keywords", []), ensure_ascii=False),
+                analysis.get("experience_years"),
+                str(analysis.get("seniority_level", "")),
+                project_id,
+            ),
+        )
+        self.conn.commit()
+
+    def update_job_analysis_by_job_id_from_project(
+        self, *, job_id: str, project_id: str
+    ) -> None:
+        row = self.conn.execute(
+            """
+            SELECT storage_path
+            FROM project_artifacts
+            WHERE project_id = ? AND artifact_type = 'job_analysis_json'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+        if row is None:
+            return
+        analysis_path = Path(str(row["storage_path"]))
+        if not analysis_path.exists() or not analysis_path.is_file():
+            return
+        analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        if not isinstance(analysis, dict):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE scraped_jobs
+            SET analysis_applying_for = ?,
+                analysis_required_skills = ?,
+                analysis_preferred_skills = ?,
+                analysis_key_responsibilities = ?,
+                analysis_keywords = ?,
+                analysis_experience_years = ?,
+                analysis_seniority_level = ?
+            WHERE id = ?
+            """,
+            (
+                str(analysis.get("applying_for", "")),
+                json.dumps(analysis.get("required_skills", []), ensure_ascii=False),
+                json.dumps(analysis.get("preferred_skills", []), ensure_ascii=False),
+                json.dumps(
+                    analysis.get("key_responsibilities", []), ensure_ascii=False
+                ),
+                json.dumps(analysis.get("keywords", []), ensure_ascii=False),
+                analysis.get("experience_years"),
+                str(analysis.get("seniority_level", "")),
+                job_id,
+            ),
+        )
+        self.conn.commit()
 
     def set_job_applied(self, job_id: str, applied: bool) -> None:
         """Mark a job as applied or not applied."""
@@ -591,11 +726,25 @@ class LocalBackend:
                 "iteration": None,
                 "mime_type": "text/markdown",
             }
+        if lower_name == "job_analysis.json":
+            return {
+                "artifact_type": "job_analysis_json",
+                "iteration": None,
+                "mime_type": "application/json",
+            }
         ext = Path(file_name).suffix.lower()
         return {
             "artifact_type": "other",
             "iteration": None,
-            "mime_type": "application/pdf" if ext == ".pdf" else "text/plain",
+            "mime_type": (
+                "application/pdf"
+                if ext == ".pdf"
+                else "text/markdown"
+                if ext == ".md"
+                else "application/json"
+                if ext == ".json"
+                else "text/plain"
+            ),
         }
 
 

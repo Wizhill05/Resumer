@@ -76,11 +76,35 @@ class ResumerCrew:
     # ------------------------------------------------------------------
 
     @agent
+    def job_analyzer(self) -> Agent:
+        return Agent(
+            config=self.agents_config["job_analyzer"],  # type: ignore[index]
+            llm=nim_llm,
+            verbose=False,
+        )
+
+    @agent
+    def summary_skills_writer(self) -> Agent:
+        return Agent(
+            config=self.agents_config["summary_skills_writer"],  # type: ignore[index]
+            llm=nim_llm,
+            verbose=False,
+        )
+
+    @agent
+    def resume_section_writer(self) -> Agent:
+        return Agent(
+            config=self.agents_config["resume_section_writer"],  # type: ignore[index]
+            llm=nim_llm,
+            verbose=False,
+        )
+
+    @agent
     def resume_writer(self) -> Agent:
         return Agent(
             config=self.agents_config["resume_writer"],  # type: ignore[index]
             llm=nim_llm,
-            verbose=True,
+            verbose=False,
         )
 
     @agent
@@ -88,12 +112,30 @@ class ResumerCrew:
         return Agent(
             config=self.agents_config["resume_shortener"],  # type: ignore[index]
             llm=nim_llm,
-            verbose=True,
+            verbose=False,
         )
 
     # ------------------------------------------------------------------
     # Tasks
     # ------------------------------------------------------------------
+
+    @task
+    def analyze_job(self) -> Task:
+        return Task(
+            config=self.tasks_config["analyze_job"],  # type: ignore[index]
+        )
+
+    @task
+    def write_summary_skills(self) -> Task:
+        return Task(
+            config=self.tasks_config["write_summary_skills"],  # type: ignore[index]
+        )
+
+    @task
+    def write_resume_sections(self) -> Task:
+        return Task(
+            config=self.tasks_config["write_resume_sections"],  # type: ignore[index]
+        )
 
     @task
     def write_resume(self) -> Task:
@@ -112,6 +154,36 @@ class ResumerCrew:
     # ------------------------------------------------------------------
 
     @crew
+    def job_analysis_crew(self) -> Crew:
+        analyze = self.analyze_job()
+        return Crew(
+            agents=[self.job_analyzer()],
+            tasks=[analyze],
+            process=Process.sequential,
+            verbose=False,
+        )
+
+    @crew
+    def summary_skills_crew(self) -> Crew:
+        write = self.write_summary_skills()
+        return Crew(
+            agents=[self.summary_skills_writer()],
+            tasks=[write],
+            process=Process.sequential,
+            verbose=False,
+        )
+
+    @crew
+    def resume_sections_crew(self) -> Crew:
+        write = self.write_resume_sections()
+        return Crew(
+            agents=[self.resume_section_writer()],
+            tasks=[write],
+            process=Process.sequential,
+            verbose=False,
+        )
+
+    @crew
     def writing_crew(self) -> Crew:
         """Iteration 1: Writer drafts + compiles."""
         write = self.write_resume()
@@ -119,7 +191,7 @@ class ResumerCrew:
             agents=[self.resume_writer()],
             tasks=[write],
             process=Process.sequential,
-            verbose=True,
+            verbose=False,
         )
 
     def shortening_crew(self) -> Crew:
@@ -129,5 +201,5 @@ class ResumerCrew:
             agents=[self.resume_shortener()],
             tasks=[shorten],
             process=Process.sequential,
-            verbose=True,
+            verbose=False,
         )

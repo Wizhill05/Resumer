@@ -17,8 +17,12 @@ interface ParsedJob {
   id: string
   title: string
   company: string
+  project_id?: string | null
   description?: string
   technical_skills?: string[]
+  required_skills?: string[]
+  preferred_skills?: string[]
+  keywords?: string[]
 }
 interface Artifact {
   id: number
@@ -86,6 +90,7 @@ export default function GeneratePage() {
   const [omissions, setOmissions] = useState<Omissions>({ ...DEFAULT_OMISSIONS })
   const [mandatoryWords, setMandatoryWords] = useState<string[]>([])
   const [customWordInput, setCustomWordInput] = useState('')
+  const [agentInstructions, setAgentInstructions] = useState('')
   const [parsedJobs, setParsedJobs] = useState<ParsedJob[]>([])
   const [selectedParsedJobId, setSelectedParsedJobId] = useState<string>('')
   const [suggestedWords, setSuggestedWords] = useState<string[]>([])
@@ -183,6 +188,30 @@ export default function GeneratePage() {
     } catch { /* ignore */ }
   }
 
+  function normalizeWordList(values: string[] | undefined): string[] {
+    if (!values) return []
+    const seen = new Set<string>()
+    const cleaned: string[] = []
+    for (const value of values) {
+      const item = value.trim()
+      if (!item) continue
+      const key = item.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      cleaned.push(item)
+    }
+    return cleaned
+  }
+
+  function buildSuggestedWords(job: ParsedJob): string[] {
+    return normalizeWordList([
+      ...(job.required_skills ?? []),
+      ...(job.preferred_skills ?? []),
+      ...(job.keywords ?? []),
+      ...(job.technical_skills ?? []),
+    ])
+  }
+
   function handleParsedJobChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const id = e.target.value
     setSelectedParsedJobId(id)
@@ -194,12 +223,32 @@ export default function GeneratePage() {
     if (job) {
       if (job.description) setJd(job.description)
       setJobLabel(`${job.company} - ${job.title}`)
-      if (job.technical_skills) {
-        setSuggestedWords(job.technical_skills)
-      } else {
-        setSuggestedWords([])
-      }
+      setSuggestedWords(buildSuggestedWords(job))
     }
+  }
+
+  function regenerateFromSelectedProject() {
+    if (!selectedProject) return
+
+    setJobLabel(selectedProject.name)
+    setJd(selectedProject.job_description || '')
+
+    const linkedJob = parsedJobs.find(j => j.project_id === selectedProject.id)
+    if (!linkedJob) {
+      setSelectedParsedJobId('')
+      setSuggestedWords([])
+      setMandatoryWords([])
+      return
+    }
+
+    setSelectedParsedJobId(linkedJob.id)
+    setSuggestedWords(buildSuggestedWords(linkedJob))
+    setMandatoryWords(
+      normalizeWordList([
+        ...(linkedJob.required_skills ?? []),
+        ...(linkedJob.keywords ?? []),
+      ])
+    )
   }
 
   function addMandatoryWord(w: string) {
@@ -241,6 +290,7 @@ export default function GeneratePage() {
         max_iterations: clampIterations(maxIter),
         omissions: omissions,
         mandatory_words: mandatoryWords,
+        agent_instructions: agentInstructions,
       }),
     })
     if (!res.ok) return
@@ -435,6 +485,23 @@ export default function GeneratePage() {
                 ))}
               </div>
             )}
+
+            <div>
+              <div className="bp-label" style={{ marginBottom: 4 }}>MODEL INSTRUCTIONS</div>
+              <textarea
+                value={agentInstructions}
+                onChange={e => setAgentInstructions(e.target.value)}
+                placeholder='Optional: "Add XYZ project for sure", "Do not mention ABC experience"...'
+                style={{
+                  ...inputStyle,
+                  height: 68,
+                  resize: 'vertical',
+                  minHeight: 54,
+                  paddingTop: 6,
+                  paddingBottom: 6,
+                }}
+              />
+            </div>
           </div>
 
           <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--line-dim)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -499,13 +566,22 @@ export default function GeneratePage() {
             <span className="bp-label">PROJECTS</span>
             <span style={{ color: 'var(--muted)', fontSize: 10, marginLeft: 'auto' }}>{projects.length} RUNS</span>
             {selectedProjectId && (
-              <button
-                className="btn-ghost"
-                style={{ height: 24, padding: '0 8px', fontSize: 10 }}
-                onClick={() => deleteProject(selectedProjectId)}
-              >
-                ✕ DELETE
-              </button>
+              <>
+                <button
+                  className="btn-ghost"
+                  style={{ height: 24, padding: '0 8px', fontSize: 10 }}
+                  onClick={regenerateFromSelectedProject}
+                >
+                  REGENERATE PREFILL
+                </button>
+                <button
+                  className="btn-ghost"
+                  style={{ height: 24, padding: '0 8px', fontSize: 10 }}
+                  onClick={() => deleteProject(selectedProjectId)}
+                >
+                  ✕ DELETE
+                </button>
+              </>
             )}
           </div>
           {/* Project dropdown */}

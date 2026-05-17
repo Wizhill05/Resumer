@@ -22,7 +22,7 @@ class TailoredProject(BaseModel):
     name: str = Field(description="Project name")
     link: str | None = Field(
         default=None,
-        description="The URL for the project, if available in the profile. Always start with https://",
+        description="The URL for the project, if available in the profile. Always start with https://. If unavailable, keep it empty.",
     )
     github_path: str | None = Field(
         default=None,
@@ -52,6 +52,85 @@ class ActivityGroup(BaseModel):
     bullets: list[str] = Field(
         description="List of concise bullet points or achievements for this topic"
     )
+
+
+class JobAnalysis(BaseModel):
+    """Structured analysis of a noisy job description."""
+
+    cleaned_job_desc: str = Field(
+        description="Clean, concise version of the job description without scraped-page noise"
+    )
+    applying_for: str | None = Field(
+        default=None,
+        description="Short role phrase, e.g. 'Software Developer' or 'AI Engineer Intern'",
+    )
+    required_skills: list[str] = Field(
+        default_factory=list,
+        description="Top required skills from the JD. Keep this to at most 10 items.",
+    )
+    preferred_skills: list[str] = Field(
+        default_factory=list,
+        description="Useful skills and keywords that are helpful but not top requirements.",
+    )
+    key_responsibilities: list[str] = Field(
+        default_factory=list,
+        description="Main responsibilities extracted from the JD.",
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="ATS keywords and exact phrases from the JD.",
+    )
+    experience_years: int | None = Field(
+        default=None,
+        description="Years of experience requested by the JD, if explicit.",
+    )
+    seniority_level: str | None = Field(
+        default=None,
+        description="intern, junior, mid, senior, lead, manager, or unknown.",
+    )
+
+
+class SummarySkillsDraft(BaseModel):
+    """Resume professional summary and skills section draft."""
+
+    professional_summary: str = Field(
+        description="Formal 1-2 line professional summary tailored to the job."
+    )
+    skills: list[SkillCategory] = Field(
+        description="Job-specific skill categories. Must include a Soft Skills category and contain exactly 15 individual skills in total, tightly focused on the target job description."
+    )
+
+
+class SectionProject(BaseModel):
+    """Intermediate project entry produced by the section writer."""
+
+    name: str = Field(description="Project name")
+    link: str | None = Field(
+        default=None,
+        description='Project link copied exactly from candidate profile when available. For newly introduced projects, use "".',
+    )
+    domain: str | None = Field(
+        default=None, description="Project domain, e.g. AI Automation or DevOps"
+    )
+    description: str = Field(description="Tailored resume-ready project description")
+
+
+class SectionExperience(BaseModel):
+    """Intermediate work experience entry produced by the section writer."""
+
+    role: str = Field(description="Role/title")
+    time_period: str = Field(description="Date range")
+    company_name: str = Field(description="Company or organization name")
+    location: str = Field(description="Location")
+    points: list[str] = Field(description="Resume bullet points")
+
+
+class ResumeSectionsDraft(BaseModel):
+    """Projects, work experience, and extra-curricular section draft."""
+
+    projects: dict[str, SectionProject] = Field(default_factory=dict)
+    work_experience: dict[str, SectionExperience] = Field(default_factory=dict)
+    extra_curricular: list[str] = Field(default_factory=list)
 
 
 class TailoredResume(BaseModel):

@@ -17,6 +17,13 @@ interface ScrapedJob {
   metadata: string[];
   snippet: string[];
   raw_attributes: string[];
+  applying_for: string;
+  required_skills: string[];
+  preferred_skills: string[];
+  key_responsibilities: string[];
+  keywords: string[];
+  experience_years: number | null;
+  seniority_level: string;
   status: string;
   scrape_session: string;
   project_id: string;
@@ -61,6 +68,15 @@ function getJobDownloadFileName(job: ScrapedJob, artifact: Artifact): string {
     `${title} - ${company}${extension}`,
     `${FALLBACK_DOWNLOAD_NAME}${extension}`,
   );
+}
+
+function formatSeniorityLabel(seniorityLevel: string): string {
+  if (!seniorityLevel.trim()) return "—";
+  return seniorityLevel
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
 }
 
 export default function JobLibraryPage() {
@@ -209,7 +225,14 @@ export default function JobLibraryPage() {
           job.company,
           job.location,
           job.description,
+          job.applying_for,
+          job.seniority_level,
+          job.experience_years?.toString() || "",
           ...(job.technical_skills || []),
+          ...(job.required_skills || []),
+          ...(job.preferred_skills || []),
+          ...(job.key_responsibilities || []),
+          ...(job.keywords || []),
           ...(job.metadata || []),
           ...(job.snippet || []),
           ...(job.raw_attributes || []),
@@ -876,6 +899,148 @@ export default function JobLibraryPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* ── Agent Analysis ── */}
+              {(selectedJob.applying_for ||
+                selectedJob.experience_years != null ||
+                selectedJob.seniority_level ||
+                selectedJob.required_skills?.length > 0 ||
+                selectedJob.preferred_skills?.length > 0 ||
+                selectedJob.key_responsibilities?.length > 0 ||
+                selectedJob.keywords?.length > 0) && (
+                <div>
+                  <div className="bp-label" style={{ marginBottom: 8 }}>
+                    AGENT JOB ANALYSIS
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                      gap: 1,
+                      border: "1px solid var(--line)",
+                      marginBottom: 10,
+                    }}
+                  >
+                    {[
+                      ["Role", selectedJob.applying_for || "—"],
+                      [
+                        "Experience",
+                        selectedJob.experience_years != null
+                          ? `${selectedJob.experience_years}+ years`
+                          : "—",
+                      ],
+                      [
+                        "Seniority",
+                        formatSeniorityLabel(selectedJob.seniority_level),
+                      ],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        style={{
+                          padding: "10px 12px",
+                          background: "var(--bg-input)",
+                          borderRight: "1px solid var(--line-dim)",
+                          borderBottom: "1px solid var(--line-dim)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 9,
+                            color: "var(--muted)",
+                            fontWeight: 700,
+                            letterSpacing: "0.1em",
+                            marginBottom: 4,
+                          }}
+                        >
+                          {label}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--white)" }}>
+                          {value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selectedJob.required_skills?.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div className="bp-label" style={{ marginBottom: 6 }}>
+                        REQUIRED SKILLS ({selectedJob.required_skills.length})
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {selectedJob.required_skills.map((s) => (
+                          <span key={`req-${s}`} className="skill-chip">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedJob.preferred_skills?.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div className="bp-label" style={{ marginBottom: 6 }}>
+                        PREFERRED SKILLS ({selectedJob.preferred_skills.length})
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {selectedJob.preferred_skills.map((s) => (
+                          <span
+                            key={`pref-${s}`}
+                            className="detail-tag"
+                            style={{
+                              color: "var(--white-dim)",
+                              borderColor: "var(--line)",
+                            }}
+                          >
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedJob.key_responsibilities?.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div className="bp-label" style={{ marginBottom: 6 }}>
+                        KEY RESPONSIBILITIES
+                      </div>
+                      <div
+                        style={{ display: "flex", flexDirection: "column", gap: 4 }}
+                      >
+                        {selectedJob.key_responsibilities.map((item, i) => (
+                          <div
+                            key={`resp-${i}`}
+                            style={{
+                              fontSize: 12,
+                              color: "var(--white-dim)",
+                              lineHeight: 1.5,
+                              padding: "6px 12px",
+                              background: "var(--bg-input)",
+                              borderLeft: "2px solid var(--line-dim)",
+                            }}
+                          >
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedJob.keywords?.length > 0 && (
+                    <div>
+                      <div className="bp-label" style={{ marginBottom: 6 }}>
+                        KEYWORDS ({selectedJob.keywords.length})
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {selectedJob.keywords.map((k) => (
+                          <span key={`kw-${k}`} className="detail-tag">
+                            {k}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

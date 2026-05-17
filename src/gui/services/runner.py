@@ -104,6 +104,7 @@ class ResumeRunController:
         api_key_env: str,
         omissions: dict[str, bool],
         mandatory_words: list[str] | None = None,
+        agent_instructions: str = "",
         project_id: str = "",
         project_name: str = "",
     ) -> None:
@@ -157,6 +158,9 @@ class ResumeRunController:
         if mandatory_words:
             cmd.append("--mandatory-words")
             cmd.extend(mandatory_words)
+        if agent_instructions.strip():
+            cmd.append("--agent-instructions")
+            cmd.append(agent_instructions)
 
         env = os.environ.copy()
         env["RESUMER_MODEL"] = model
@@ -353,6 +357,35 @@ class ResumeRunController:
             self._suppress_final_answer_block = True
             return "Agent returned structured response"
 
+        noisy_markers = (
+            "entering new crewagentexecutor chain",
+            "finished chain",
+            "i now can give a great answer",
+            "using tool:",
+            "tool input:",
+            "tool output:",
+            "thought:",
+            "action:",
+            "action input:",
+            "observation:",
+            "valid json object",
+            "candidate truth skills json:",
+            "candidate profile json:",
+            "job analysis json:",
+            "target job description:",
+            "resume json to trim:",
+            "litellm.completion",
+        )
+        if any(marker in lower for marker in noisy_markers):
+            return None
+
+        # Suppress raw model JSON and large prompt/output fragments. The CLI emits
+        # concise stage events, so the UI does not need full prompts or payloads.
+        if len(line) > 600 and not any(
+            marker in lower for marker in ("error", "failed", "traceback")
+        ):
+            return None
+
         # Drop noisy JSON-like lines that clutter console view.
         json_noise_markers = (
             '"personal_information"',
@@ -373,6 +406,15 @@ class ResumeRunController:
             return None
         if any(marker in lower for marker in json_noise_markers):
             return None
+
+        if "job analysis agent:" in lower:
+            return line
+        if "summary and skills agent:" in lower:
+            return line
+        if "projects and experience agent:" in lower:
+            return line
+        if "shortening agent:" in lower:
+            return line
 
         # Make shortener phase explicit in logs.
         if "draft iteration" in lower and "/" in line and not line.startswith("Draft"):
@@ -412,6 +454,20 @@ class ResumeRunController:
 
         if "Task Started" in line or "Task Completed" in line or "Task Failed" in line:
             self.status.active_task = line.strip()
+
+        lower = line.lower()
+        if "job analysis agent:" in lower:
+            self.status.active_agent = "job_analyzer"
+            self.status.active_task = "analyze_job"
+        elif "summary and skills agent:" in lower:
+            self.status.active_agent = "summary_skills_writer"
+            self.status.active_task = "write_summary_skills"
+        elif "projects and experience agent:" in lower:
+            self.status.active_agent = "resume_section_writer"
+            self.status.active_task = "write_resume_sections"
+        elif "shortening agent:" in lower:
+            self.status.active_agent = "resume_shortener"
+            self.status.active_task = "shorten_resume"
 
         if "Name:" in line:
             task_match = TASK_NAME_RE.search(line)

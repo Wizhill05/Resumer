@@ -78,6 +78,7 @@ class GenerateRequest(BaseModel):
     max_iterations: int = MAX_SHORTENING_ITERATIONS
     omissions: dict[str, bool] = {}
     mandatory_words: list[str] = []
+    agent_instructions: str = ""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -199,13 +200,20 @@ def list_artifacts(uid: str, project_id: str) -> list[dict[str, Any]]:
 
 @app.get("/api/artifacts/download")
 def download_artifact(path: str) -> Response:
-    """Serve a stored artifact file (PDF or MD) by its absolute storage_path."""
+    """Serve a stored artifact file by its absolute storage_path."""
     artifact_path = Path(path)
     if not artifact_path.exists() or not artifact_path.is_file():
         raise HTTPException(404, f"Artifact not found: {path}")
 
     suffix = artifact_path.suffix.lower()
-    mime = "application/pdf" if suffix == ".pdf" else "text/markdown"
+    if suffix == ".pdf":
+        mime = "application/pdf"
+    elif suffix == ".md":
+        mime = "text/markdown"
+    elif suffix == ".json":
+        mime = "application/json"
+    else:
+        mime = "application/octet-stream"
     content_disposition = f'inline; filename="{artifact_path.name}"'
 
     data = artifact_path.read_bytes()
@@ -264,6 +272,7 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
         api_key_env=body.api_key_env,
         omissions=body.omissions,
         mandatory_words=body.mandatory_words,
+        agent_instructions=body.agent_instructions,
         project_id=project_id,
         project_name=job_label or sanitized_label,
     )
@@ -374,6 +383,10 @@ class LinkJobRequest(BaseModel):
 @app.put("/api/jobs/{job_id}/project")
 def link_job_to_project(job_id: str, body: LinkJobRequest) -> dict[str, str]:
     _backend.link_job_to_project(job_id=job_id, project_id=body.project_id)
+    _backend.update_job_analysis_by_job_id_from_project(
+        job_id=job_id,
+        project_id=body.project_id,
+    )
     return {"status": "ok"}
 
 
@@ -474,6 +487,14 @@ def _poll_until_done(uid: str, project_id: str, controller: ResumeRunController)
 
     try:
         if output_dir and output_dir.exists():
+            analysis_path = output_dir / "job_analysis.json"
+            if analysis_path.exists() and analysis_path.is_file():
+                analysis_data = json.loads(analysis_path.read_text(encoding="utf-8"))
+                if isinstance(analysis_data, dict):
+                    _backend.update_job_analysis_by_project_id(
+                        project_id=project_id,
+                        analysis=analysis_data,
+                    )
             _backend.replace_project_artifacts_from_local(
                 uid=uid,
                 project_id=project_id,

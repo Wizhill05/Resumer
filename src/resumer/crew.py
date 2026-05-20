@@ -122,14 +122,6 @@ class ResumerCrew:
             verbose=False,
         )
 
-    @agent
-    def resume_shortener(self) -> Agent:
-        return Agent(
-            config=self.agents_config["resume_shortener"],  # type: ignore[index]
-            llm=get_llm(),
-            verbose=False,
-        )
-
     # ------------------------------------------------------------------
     # Tasks
     # ------------------------------------------------------------------
@@ -162,12 +154,6 @@ class ResumerCrew:
     def write_resume(self) -> Task:
         return Task(
             config=self.tasks_config["write_resume"],  # type: ignore[index]
-        )
-
-    @task
-    def shorten_resume(self) -> Task:
-        return Task(
-            config=self.tasks_config["shorten_resume"],  # type: ignore[index]
         )
 
     # ------------------------------------------------------------------
@@ -221,16 +207,6 @@ class ResumerCrew:
         return Crew(
             agents=[self.resume_writer()],
             tasks=[write],
-            process=Process.sequential,
-            verbose=False,
-        )
-
-    def shortening_crew(self) -> Crew:
-        """Iterations 2+: Shortener trims exactly N lines + compiles."""
-        shorten = self.shorten_resume()
-        return Crew(
-            agents=[self.resume_shortener()],
-            tasks=[shorten],
             process=Process.sequential,
             verbose=False,
         )

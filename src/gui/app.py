@@ -925,9 +925,6 @@ def _render_controls_panel(
                 preset = st.selectbox("Model Selection", options=preset_names, index=0)
 
             with right:
-                max_iterations = st.slider(
-                    "No of Iterations", min_value=1, max_value=5, value=5
-                )
                 st.markdown(
                     f"<div class='mono-note' style='margin-top:0.35rem; margin-bottom:0.9rem;'>"
                     f"Status: {_status_badge(controller.status.state)}</div>",
@@ -1011,7 +1008,6 @@ def _render_controls_panel(
                     controller.start_run(
                         jd_path=str(resolved_jd),
                         data_path=str(profile_path),
-                        max_iterations=max_iterations,
                         job_label=local_run_label,
                         model=final_model,
                         api_key_env=final_key_env,

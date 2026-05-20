@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import copy
 import hashlib
 import json
 import re
@@ -120,7 +119,6 @@ def _banner(msg: str) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # project root
-MAX_SHORTENING_ITERATIONS = 5
 TARGET_INDIVIDUAL_SKILLS = 15
 TModel = TypeVar("TModel", bound=BaseModel)
 _PROJECT_ACTION_VERBS = {
@@ -256,19 +254,6 @@ def _sanitize_folder_name(name: str) -> str:
     name = re.sub(r"[^a-z0-9]+", "_", name)
     return name.strip("_")
 
-
-def _sanitize_max_iterations(value: int) -> int:
-    return max(1, min(MAX_SHORTENING_ITERATIONS, value))
-
-
-def _write_single_page_pdf(source_pdf: Path, output_pdf: Path) -> None:
-    reader = PdfReader(str(source_pdf))
-    if not reader.pages:
-        raise ValueError(f"Source PDF has no pages: {source_pdf}")
-    writer = PdfWriter()
-    writer.add_page(reader.pages[0])
-    with output_pdf.open("wb") as fh:
-        writer.write(fh)
 
 
 def _extract_json_object(raw_text: str) -> str:
@@ -1345,296 +1330,6 @@ def _ensure_minimum_skills_in_resume_json(
     return TailoredResume.model_validate(parsed).model_dump_json()
 
 
-def _remove_experience_bullet(
-    resume_data: dict[str, Any],
-    *,
-    bullet_index: int,
-    preferred_experience_index: int | None = None,
-) -> dict[str, Any] | None:
-    experiences = resume_data.get("experience")
-    if not isinstance(experiences, list):
-        return None
-
-    if preferred_experience_index is not None:
-        if preferred_experience_index < 0 or preferred_experience_index >= len(experiences):
-            return None
-        candidate_indexes = [preferred_experience_index]
-    else:
-        candidate_indexes = list(range(len(experiences)))
-
-    for experience_index in candidate_indexes:
-        experience = experiences[experience_index]
-        if not isinstance(experience, dict):
-            continue
-        bullets = experience.get("bullets")
-        if not isinstance(bullets, list) or len(bullets) <= bullet_index:
-            continue
-        removed = bullets.pop(bullet_index)
-        role = str(experience.get("role") or f"experience {experience_index + 1}").strip()
-        organization = str(experience.get("organization") or "").strip()
-        label_target = f"{role} @ {organization}" if organization else role
-        ordinal = "first" if bullet_index == 0 else "second"
-        return {
-            "kind": "experience_bullet",
-            "label": f"Removed {ordinal} bullet from {label_target}",
-            "experience_index": experience_index,
-            "experience_role": role,
-            "experience_organization": organization,
-            "item_index": bullet_index,
-            "value": removed,
-        }
-
-    return None
-
-
-def _remove_one_experience_bullet(resume_data: dict[str, Any]) -> dict[str, Any] | None:
-    removal_attempts: list[tuple[int, int | None]] = [
-        (1, 0),
-        (1, 1),
-        (0, 0),
-        (0, 1),
-        (1, None),
-        (0, None),
-    ]
-    for bullet_index, preferred_experience_index in removal_attempts:
-        edit = _remove_experience_bullet(
-            resume_data,
-            bullet_index=bullet_index,
-            preferred_experience_index=preferred_experience_index,
-        )
-        if edit:
-            return edit
-    return None
-
-
-def _remove_project_bullet(
-    resume_data: dict[str, Any],
-    *,
-    project_index: int,
-) -> dict[str, Any] | None:
-    projects = resume_data.get("projects")
-    if not isinstance(projects, list) or len(projects) <= project_index:
-        return None
-    project = projects[project_index]
-    if not isinstance(project, dict):
-        return None
-    points = _project_points_from_entry(project)
-    if len(points) <= 1:
-        return None
-
-    removed = points.pop()
-    _set_project_points_in_entry(project, points)
-    project_name = project.get("name") or f"project {project_index + 1}"
-    return {
-        "kind": "project_bullet",
-        "label": f"Removed one bullet from project {project_index + 1}: {project_name}",
-        "project_index": project_index,
-        "project_name": str(project_name).strip(),
-        "item_index": len(points),
-        "value": removed,
-    }
-
-
-def _remove_last_project(resume_data: dict[str, Any]) -> dict[str, Any] | None:
-    projects = resume_data.get("projects")
-    if not isinstance(projects, list) or len(projects) < 1:
-        return None
-    removed_index = len(projects) - 1
-    removed = projects.pop(removed_index)
-    removed_name = removed.get("name") if isinstance(removed, dict) else "project"
-    return {
-        "kind": "project_entry",
-        "label": f"Removed project {removed_index + 1}: {removed_name}",
-        "project_index": removed_index,
-        "value": removed,
-    }
-
-
-def _find_and_remove_next_bullet(resume_data: dict[str, Any]) -> dict[str, Any] | None:
-    # 1. Look for project entries with > 2 bullets, starting from the last project
-    projects = resume_data.get("projects")
-    if isinstance(projects, list):
-        for i in reversed(range(len(projects))):
-            project = projects[i]
-            if isinstance(project, dict):
-                points = _project_points_from_entry(project)
-                if len(points) > 2:  # Keep at least 2 bullets
-                    removed = points.pop()
-                    _set_project_points_in_entry(project, points)
-                    project_name = project.get("name") or f"project {i + 1}"
-                    return {
-                        "kind": "project_bullet",
-                        "label": f"Removed one bullet from project {i + 1}: {project_name}",
-                        "project_index": i,
-                        "project_name": str(project_name).strip(),
-                        "item_index": len(points),
-                        "value": removed,
-                    }
-
-    # 2. Look for experience entries with > 2 bullets, starting from the last experience
-    experiences = resume_data.get("experience")
-    if isinstance(experiences, list):
-        for i in reversed(range(len(experiences))):
-            experience = experiences[i]
-            if isinstance(experience, dict):
-                bullets = experience.get("bullets")
-                if isinstance(bullets, list) and len(bullets) > 2:  # Keep at least 2 bullets
-                    removed = bullets.pop()
-                    role = str(experience.get("role") or f"experience {i + 1}").strip()
-                    organization = str(experience.get("organization") or "").strip()
-                    label_target = f"{role} @ {organization}" if organization else role
-                    return {
-                        "kind": "experience_bullet",
-                        "label": f"Removed one bullet from {label_target}",
-                        "experience_index": i,
-                        "experience_role": role,
-                        "experience_organization": organization,
-                        "item_index": len(bullets),
-                        "value": removed,
-                    }
-
-    return None
-
-
-def _restore_local_shortening_edit(
-    resume_data: dict[str, Any],
-    edit: dict[str, Any],
-) -> bool:
-    def _resolve_experience(
-        experiences: list[Any],
-        *,
-        experience_index: int,
-        role_anchor: str,
-        org_anchor: str,
-    ) -> dict[str, Any] | None:
-        if 0 <= experience_index < len(experiences):
-            candidate = experiences[experience_index]
-            if isinstance(candidate, dict):
-                candidate_role = str(candidate.get("role") or "").strip().casefold()
-                candidate_org = str(candidate.get("organization") or "").strip().casefold()
-                if (not role_anchor or candidate_role == role_anchor) and (
-                    not org_anchor or candidate_org == org_anchor
-                ):
-                    return candidate
-
-        if not role_anchor and not org_anchor:
-            return None
-
-        for candidate in experiences:
-            if not isinstance(candidate, dict):
-                continue
-            candidate_role = str(candidate.get("role") or "").strip().casefold()
-            candidate_org = str(candidate.get("organization") or "").strip().casefold()
-            if (not role_anchor or candidate_role == role_anchor) and (
-                not org_anchor or candidate_org == org_anchor
-            ):
-                return candidate
-        return None
-
-    def _resolve_project(
-        projects: list[Any],
-        *,
-        project_index: int,
-        name_anchor: str,
-    ) -> dict[str, Any] | None:
-        if 0 <= project_index < len(projects):
-            candidate = projects[project_index]
-            if isinstance(candidate, dict):
-                candidate_name = str(candidate.get("name") or "").strip().casefold()
-                if not name_anchor or candidate_name == name_anchor:
-                    return candidate
-
-        if not name_anchor:
-            return None
-
-        for candidate in projects:
-            if not isinstance(candidate, dict):
-                continue
-            candidate_name = str(candidate.get("name") or "").strip().casefold()
-            if candidate_name == name_anchor:
-                return candidate
-        return None
-
-    kind = edit.get("kind")
-    if kind == "experience_bullet":
-        experiences = resume_data.get("experience")
-        if not isinstance(experiences, list):
-            return False
-        try:
-            experience_index = int(edit.get("experience_index", -1))
-        except (TypeError, ValueError):
-            experience_index = -1
-        role_anchor = str(edit.get("experience_role") or "").strip().casefold()
-        org_anchor = str(edit.get("experience_organization") or "").strip().casefold()
-        experience = _resolve_experience(
-            experiences,
-            experience_index=experience_index,
-            role_anchor=role_anchor,
-            org_anchor=org_anchor,
-        )
-        if experience is None:
-            return False
-        bullets = experience.get("bullets")
-        if not isinstance(bullets, list):
-            return False
-        try:
-            item_index = int(edit.get("item_index", len(bullets)))
-        except (TypeError, ValueError):
-            item_index = len(bullets)
-        restored_value = edit.get("value")
-        if restored_value is None:
-            return False
-        if not isinstance(restored_value, str):
-            restored_value = str(restored_value).strip()
-        if not restored_value:
-            return False
-        item_index = min(max(item_index, 0), len(bullets))
-        bullets.insert(item_index, restored_value)
-        return True
-
-    projects = resume_data.get("projects")
-    if not isinstance(projects, list):
-        return False
-
-    try:
-        project_index = int(edit.get("project_index", -1))
-    except (TypeError, ValueError):
-        project_index = -1
-    if kind == "project_bullet":
-        project_name_anchor = str(edit.get("project_name") or "").strip().casefold()
-        project = _resolve_project(
-            projects,
-            project_index=project_index,
-            name_anchor=project_name_anchor,
-        )
-        if project is None:
-            return False
-        points = _project_points_from_entry(project)
-        try:
-            item_index = int(edit.get("item_index", len(points)))
-        except (TypeError, ValueError):
-            item_index = len(points)
-        item_index = min(max(item_index, 0), len(points))
-        restored_value = edit.get("value")
-        if restored_value is None:
-            return False
-        if not isinstance(restored_value, str):
-            restored_value = str(restored_value).strip()
-        if not restored_value:
-            return False
-        points.insert(item_index, restored_value)
-        _set_project_points_in_entry(project, points)
-        return True
-
-    if kind == "project_entry":
-        if project_index < 0 or project_index > len(projects):
-            return False
-        projects.insert(project_index, edit.get("value"))
-        return True
-
-    return False
-
-
 def _prepare_resume_json_for_render(
     current_json: str,
     *,
@@ -1693,12 +1388,6 @@ def main() -> None:
         "--data",
         default="input/truth.json",
         help="Path to master profile JSON",
-    )
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=MAX_SHORTENING_ITERATIONS,
-        help=f"Max feedback-loop iterations (hard cap: {MAX_SHORTENING_ITERATIONS})",
     )
     parser.add_argument(
         "--job-label",
@@ -1763,12 +1452,6 @@ def main() -> None:
         help="Optional custom CSS path for this run",
     )
     args = parser.parse_args()
-    requested_max_iterations = args.max_iterations
-    args.max_iterations = _sanitize_max_iterations(args.max_iterations)
-    if requested_max_iterations != args.max_iterations:
-        _warn(
-            f"Requested max iterations ({requested_max_iterations}) exceeded the cap. Using {args.max_iterations}."
-        )
 
     if args.model.strip():
         os.environ["RESUMER_MODEL"] = args.model.strip()
@@ -1863,14 +1546,12 @@ def main() -> None:
     from src.resumer.tools.pdf_tools import (
         compile_pdf,
         _get_page_count,
-        _get_overflow_lines,
     )
 
     from src.resumer.tools.pdf_tools import _shared_state
 
     MAX_RUN_ATTEMPTS = 3
     final_success = False
-    overflow_limit_reached = False
     attempt_feedback = "None"
 
     for run_attempt in range(1, MAX_RUN_ATTEMPTS + 1):
@@ -1880,7 +1561,6 @@ def main() -> None:
             )
 
         current_json = ""
-        overflow_lines = 0
         skill_pool: list[str] = []
 
         try:
@@ -2006,209 +1686,35 @@ def main() -> None:
                 compile_pdf=compile_pdf,
                 output_dir=output_dir,
                 get_page_count=_get_page_count,
-                get_overflow_lines=_get_overflow_lines,
+                get_overflow_lines=lambda _: 0,  # auto-fit handles fitting
                 shared_state=_shared_state,
             )
         except Exception as e:
-            _err(f"Could not compile initial resume draft: {e}")
+            _err(f"Could not compile resume draft: {e}")
             continue
 
-        if pages == 1:
-            if content_height > 0 and content_height < 900:
-                _warn(
-                    f"Draft {draft_iteration}: UNDERFLOW (Content height: {content_height}px / ~1122px). Too much empty space."
-                )
-                if run_attempt < MAX_RUN_ATTEMPTS:
-                    attempt_feedback = (
-                        "Previous attempt underfilled the page. Add richer, "
-                        "job-relevant detail across project descriptions, work "
-                        "experience bullets, and the summary while keeping one-page fit."
-                    )
-                    _warn("Discarding this run and restarting with enrichment feedback...")
-                    continue
-                else:
-                    _warn("Underfilled page on final attempt. Accepting as fallback to ensure resume is generated.")
-            final_success = True
-            _ok(
-                f"Draft {draft_iteration}: Resume fits on 1 page. Content height: {content_height}px"
-            )
-            break
-
-        _warn(
-            f"Draft {draft_iteration}: OVERFLOW ({overflow_lines} rendered lines). Content height: {content_height or '?'}px"
-        )
-        _info("Running local shortening pass without model/API calls.")
-
-        working_data = json.loads(current_json)
-        removed_bullet_edits: list[dict[str, Any]] = []
-        fit_found = False
-        fit_after_project_removal = False
-
-        # Try dynamic bullet-level shortening first
-        while True:
-            edit = _find_and_remove_next_bullet(working_data)
-            if not edit:
-                _info("No more bullets can be safely removed (minimum 2 bullets per entry reached).")
-                break
-            removed_bullet_edits.append(edit)
-            _info(str(edit["label"]))
-
-            try:
-                candidate_json = TailoredResume.model_validate(
-                    _sanitize_em_dashes(working_data)
-                ).model_dump_json()
-                candidate_json = _prepare_resume_json_for_render(
-                    candidate_json,
-                    args=args,
-                    jd=jd,
-                    skill_pool=skill_pool,
-                    profile_project_links=profile_project_links,
-                )
-                draft_iteration += 1
-                _, pages, overflow_lines, content_height = _compile_resume_candidate(
-                    resume_json=candidate_json,
-                    iteration=draft_iteration,
-                    compile_pdf=compile_pdf,
-                    output_dir=output_dir,
-                    get_page_count=_get_page_count,
-                    get_overflow_lines=_get_overflow_lines,
-                    shared_state=_shared_state,
-                )
-            except Exception as e:
-                _err(f"Could not compile local shortening draft: {e}")
-                break
-
-            current_json = candidate_json
-            working_data = json.loads(candidate_json)
-            if pages == 1:
-                fit_found = True
-                _ok(f"Draft {draft_iteration}: local bullet shortening fits on 1 page.")
-                break
+        # Auto-fit in makepdf.py handles page fitting via font-size/line-height
+        # binary search. Check for underflow (too little content).
+        if content_height > 0 and content_height < 900:
             _warn(
-                f"Draft {draft_iteration}: still overflowing ({overflow_lines} rendered lines)."
+                f"Draft {draft_iteration}: UNDERFLOW (Content height: {content_height}px / ~1109px). Too much empty space."
             )
-
-        # If bullet shortening was not enough, try iterative project-level shortening
-        removed_projects_edits = []
-        if not fit_found:
-            _info("Bullet shortening insufficient. Attempting project-level shortening.")
-            while True:
-                project_edit = _remove_last_project(working_data)
-                if not project_edit:
-                    _info("Project-removal step skipped; no more projects to remove.")
-                    break
-                removed_projects_edits.append(project_edit)
-                _info(str(project_edit["label"]))
-
-                try:
-                    candidate_json = TailoredResume.model_validate(
-                        _sanitize_em_dashes(working_data)
-                    ).model_dump_json()
-                    candidate_json = _prepare_resume_json_for_render(
-                        candidate_json,
-                        args=args,
-                        jd=jd,
-                        skill_pool=skill_pool,
-                        profile_project_links=profile_project_links,
-                    )
-                    draft_iteration += 1
-                    _, pages, overflow_lines, content_height = _compile_resume_candidate(
-                        resume_json=candidate_json,
-                        iteration=draft_iteration,
-                        compile_pdf=compile_pdf,
-                        output_dir=output_dir,
-                        get_page_count=_get_page_count,
-                        get_overflow_lines=_get_overflow_lines,
-                        shared_state=_shared_state,
-                    )
-                except Exception as e:
-                    _err(f"Could not compile project-removal draft: {e}")
-                    break
-
-                current_json = candidate_json
-                working_data = json.loads(candidate_json)
-                if pages == 1:
-                    fit_found = True
-                    fit_after_project_removal = True
-                    _ok(
-                        f"Draft {draft_iteration}: fits on 1 page after removing {len(removed_projects_edits)} project(s)."
-                    )
-                    break
-                _warn(
-                    f"Draft {draft_iteration}: still overflowing ({overflow_lines} rendered lines) after project removal."
+            if run_attempt < MAX_RUN_ATTEMPTS:
+                attempt_feedback = (
+                    "Previous attempt underfilled the page. Add richer, "
+                    "job-relevant detail across project descriptions, work "
+                    "experience bullets, and the summary while keeping one-page fit."
                 )
-
-        if fit_found and fit_after_project_removal:
-            for edit in reversed(removed_bullet_edits):
-                restored_data = copy.deepcopy(working_data)
-                if not _restore_local_shortening_edit(restored_data, edit):
-                    continue
-                try:
-                    restored_json = TailoredResume.model_validate(
-                        _sanitize_em_dashes(restored_data)
-                    ).model_dump_json()
-                    restored_json = _prepare_resume_json_for_render(
-                        restored_json,
-                        args=args,
-                        jd=jd,
-                        skill_pool=skill_pool,
-                        profile_project_links=profile_project_links,
-                    )
-                    draft_iteration += 1
-                    _, pages, overflow_lines, content_height = _compile_resume_candidate(
-                        resume_json=restored_json,
-                        iteration=draft_iteration,
-                        compile_pdf=compile_pdf,
-                        output_dir=output_dir,
-                        get_page_count=_get_page_count,
-                        get_overflow_lines=_get_overflow_lines,
-                        shared_state=_shared_state,
-                    )
-                except Exception as e:
-                    _warn(f"Could not test restoring removed content: {e}")
-                    continue
-
-                if pages == 1:
-                    working_data = json.loads(restored_json)
-                    current_json = restored_json
-                    _ok(f"Restored and kept fit: {edit['label']}")
-                else:
-                    _info(f"Restore overflowed, keeping removal: {edit['label']}")
-
-        if fit_found:
-            try:
-                draft_iteration += 1
-                _, pages, overflow_lines, content_height = _compile_resume_candidate(
-                    resume_json=current_json,
-                    iteration=draft_iteration,
-                    compile_pdf=compile_pdf,
-                    output_dir=output_dir,
-                    get_page_count=_get_page_count,
-                    get_overflow_lines=_get_overflow_lines,
-                    shared_state=_shared_state,
-                )
-            except Exception as e:
-                _err(f"Could not compile final local-shortened draft: {e}")
+                _warn("Discarding this run and restarting with enrichment feedback...")
                 continue
-            if pages != 1:
-                _warn(
-                    f"Final local-shortened draft still overflowed ({overflow_lines} rendered lines)."
-                )
-                overflow_limit_reached = True
-                break
+            else:
+                _warn("Underfilled page on final attempt. Accepting as fallback to ensure resume is generated.")
 
-            final_success = True
-            break
-
-        _warn(
-            "Local shortening could not fit the resume. Final output will keep only the first page."
+        final_success = True
+        _ok(
+            f"Draft {draft_iteration}: Resume auto-fitted to 1 page. Content height: {content_height}px"
         )
-        overflow_limit_reached = True
-
-        if final_success:
-            break
-        if overflow_limit_reached:
-            break
+        break
 
     # ── Post-process result ──────────────────────────────────────────────
     _step(4, "Wrapping up…")
@@ -2225,9 +1731,16 @@ def main() -> None:
             page_count = len(PdfReader(str(best_pdf)).pages)
 
             if page_count == 1:
-                _ok("Final resume is exactly 1 page! 🎉")
+                _ok("Final resume is exactly 1 page!")
             else:
-                _warn(f"Best draft is {page_count} page(s).")
+                _warn(f"Best draft is {page_count} page(s). Keeping only page 1.")
+                # Crop to first page as edge-case fallback
+                writer = PdfWriter()
+                writer.add_page(PdfReader(str(best_pdf)).pages[0])
+                cropped = output_dir / "draft_v1_cropped.pdf"
+                with cropped.open("wb") as fh:
+                    writer.write(fh)
+                best_pdf = cropped
 
             final = output_dir / "final_resume.pdf"
             shutil.copy2(best_pdf, final)
@@ -2240,32 +1753,9 @@ def main() -> None:
         else:
             _warn("No PDF drafts found in output folder.")
             _warn("The crew may not have used the compile_pdf tool.")
-    elif overflow_limit_reached and pdf_candidates:
-        best_pdf = pdf_candidates[-1]
-        page_count = len(PdfReader(str(best_pdf)).pages)
-        final = output_dir / "final_resume.pdf"
-
-        if page_count > 1:
-            _warn(
-                f"Still {page_count} pages after {args.max_iterations} iterations. Keeping only page 1 in final output."
-            )
-            _write_single_page_pdf(best_pdf, final)
-            produced_final = True
-            _ok(f"Final resume (first page only) → {final.resolve()}")
-        else:
-            shutil.copy2(best_pdf, final)
-            produced_final = True
-            _ok(f"Final resume → {final.resolve()}")
-
-        best_md = best_pdf.with_suffix(".md")
-        if best_md.exists():
-            shutil.copy2(best_md, output_dir / "final_resume.md")
-    elif not final_success:
+    else:
         _err(
-            f"All {MAX_RUN_ATTEMPTS} attempts produced underflow or failed to fit on 1 page."
-        )
-        _err(
-            "No final resume was produced. Try adjusting the job description or profile data."
+            f"All {MAX_RUN_ATTEMPTS} attempts failed to produce a resume."
         )
 
     print()

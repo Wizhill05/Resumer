@@ -39,7 +39,6 @@ from src.api.scrape_service import ScrapeService  # noqa: E402
 from src.api.linkedin_scrape_service import LinkedInScrapeService  # noqa: E402
 
 # ── Singletons ────────────────────────────────────────────────────────────────
-MAX_SHORTENING_ITERATIONS = 5
 
 _backend = LocalBackend()
 
@@ -80,7 +79,6 @@ class GenerateRequest(BaseModel):
     template_id: str = ""
     model: str = "mistral/mistral-large-latest"
     api_key_env: str = "MISTRAL_API_KEY"
-    max_iterations: int = MAX_SHORTENING_ITERATIONS
     omissions: dict[str, bool] = {}
     mandatory_words: list[str] = []
     agent_instructions: str = ""
@@ -109,10 +107,6 @@ def _sanitize_label(label: str) -> str:
     label = label.lower().strip()
     label = re.sub(r"[^a-z0-9]+", "_", label)
     return label.strip("_") or "untitled_run"
-
-
-def _sanitize_max_iterations(value: int) -> int:
-    return max(1, min(MAX_SHORTENING_ITERATIONS, value))
 
 
 def _serialize_dates(item: dict[str, Any]) -> dict[str, Any]:
@@ -350,7 +344,6 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
     # Build and start the controller
     controller = ResumeRunController(workspace_root=_PROJECT_ROOT)
     _set_controller(project_id, controller)
-    max_iterations = _sanitize_max_iterations(body.max_iterations)
 
     log_file = run_dir / "terminal_logs.md"
     log_file.write_text("```text\n", encoding="utf-8")
@@ -358,7 +351,6 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
     controller.start_run(
         jd_path=str(jd_path.relative_to(_PROJECT_ROOT)),
         data_path=str(data_path.relative_to(_PROJECT_ROOT)),
-        max_iterations=max_iterations,
         job_label=sanitized_label,
         model=body.model,
         api_key_env=body.api_key_env,

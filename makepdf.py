@@ -317,7 +317,11 @@ def generate_pdf(
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        # Set viewport to exactly match A4 width minus PDF margins (764px) at 96 DPI
+        page = browser.new_page(
+            viewport={"width": 764, "height": 1123},
+        )
+        page.emulate_media(media="print")
 
         # Use DOM readiness instead of networkidle. The template references
         # external font/icon CDNs, and waiting for full network idle can hang.
@@ -374,105 +378,91 @@ def generate_pdf(
 
         page.wait_for_timeout(200)
 
-        # Apply Dynamic DOM Micro-Squeezing Typesetting Optimizer
+        # Auto-fit: binary search for optimal font-size and line-height
+        # Inspired by https://github.com/vladartym/always-fit-resume
+        # Pass 1: find the largest font-size (8pt-12pt) at tight line-height
+        # Pass 2: expand line-height (1.15x-1.8x) to fill remaining space
         try:
-            page.evaluate(
+            fit_result = page.evaluate(
                 """() => {
-                    const elements = document.querySelectorAll('.resume-body li, .resume-body p');
-                    for (const el of elements) {
-                        if (!el.textContent.trim()) continue;
+                    const body = document.body;
+                    const FS_MIN = 8;
+                    const FS_MAX = 12;
+                    const LH_MIN = 1.15;
+                    const LH_MAX = 1.8;
 
-                        const originalHTML = el.innerHTML;
+                    // A4 at current print margins: 297mm - 0.2cm top - 0.2cm bottom = 293.6mm
+                    // Body padding adds ~1cm each side from the base CSS.
+                    // Playwright renders at 96dpi: 1mm = 3.7795px
+                    // Available content height ~ 293.6mm * 3.7795 ≈ 1109px
+                    // Use scrollHeight vs a single-page limit with a safe buffer to prevent overflows.
+                    const PAGE_HEIGHT = 1100;
 
-                        function wrapWords(node) {
-                            if (node.nodeType === Node.TEXT_NODE) {
-                                const text = node.textContent;
-                                const words = text.split(/(\s+)/);
-                                const fragment = document.createDocumentFragment();
-                                for (const word of words) {
-                                    if (word.trim().length > 0) {
-                                        const span = document.createElement('span');
-                                        span.className = 'word-span';
-                                        span.textContent = word;
-                                        fragment.appendChild(span);
-                                    } else {
-                                        fragment.appendChild(document.createTextNode(word));
-                                    }
-                                }
-                                node.parentNode.replaceChild(fragment, node);
-                            } else if (node.nodeType === Node.ELEMENT_NODE) {
-                                if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') return;
-                                const children = Array.from(node.childNodes);
-                                for (const child of children) {
-                                    wrapWords(child);
-                                }
-                            }
-                        }
+                    function measure() {
+                        return body.scrollHeight;
+                    }
 
-                        wrapWords(el);
+                    function applyStyle(fontSize, lineHeight) {
+                        body.style.fontSize = fontSize + 'pt';
+                        body.style.lineHeight = String(lineHeight);
+                    }
 
-                        const spans = Array.from(el.querySelectorAll('.word-span'));
-                        if (spans.length === 0) {
-                            el.innerHTML = originalHTML;
-                            continue;
-                        }
-
-                        const lines = [];
-                        let currentLineTop = -99999;
-                        let currentLine = [];
-                        for (const span of spans) {
-                            const top = span.getBoundingClientRect().top;
-                            if (Math.abs(top - currentLineTop) > 3) {
-                                if (currentLine.length > 0) {
-                                    lines.push(currentLine);
-                                }
-                                currentLine = [span];
-                                currentLineTop = top;
+                    // Pass 1: binary search for max font-size at tightest line-height
+                    let lo = FS_MIN;
+                    let hi = FS_MAX;
+                    applyStyle(hi, LH_MIN);
+                    if (measure() <= PAGE_HEIGHT) {
+                        // Already fits at max font size — skip search
+                        lo = hi;
+                    } else {
+                        for (let i = 0; i < 30; i++) {
+                            const mid = (lo + hi) / 2;
+                            applyStyle(mid, LH_MIN);
+                            if (measure() <= PAGE_HEIGHT) {
+                                lo = mid;
                             } else {
-                                currentLine.push(span);
+                                hi = mid;
                             }
-                        }
-                        if (currentLine.length > 0) {
-                            lines.push(currentLine);
-                        }
-
-                        el.innerHTML = originalHTML;
-
-                        const totalLines = lines.length;
-                        if (totalLines <= 1) continue;
-
-                        const lastLineWords = lines[totalLines - 1];
-                        const lastLineWordCount = lastLineWords.length;
-                        const lastLineText = lastLineWords.map(s => s.textContent).join(' ').trim();
-                        const lastLineCharCount = lastLineText.length;
-
-                        // Detect orphan word on the last line (widow)
-                        const isWidow = (lastLineWordCount <= 2) || (lastLineWordCount <= 3 && lastLineCharCount <= 18);
-
-                        if (isWidow) {
-                            const originalHeight = el.offsetHeight;
-                            let success = false;
-
-                            // Try squeezing up to -0.04em
-                            for (let ls = -0.005; ls >= -0.04; ls -= 0.005) {
-                                el.style.letterSpacing = `${ls}em`;
-                                if (el.offsetHeight < originalHeight) {
-                                    success = true;
-                                    break;
-                                }
-                            }
-
-                            if (!success) {
-                                el.style.letterSpacing = 'normal';
-                            }
+                            if (hi - lo < 0.01) break;
                         }
                     }
+                    const fontSize = Math.floor(lo * 100) / 100;
+
+                    // Pass 2: binary search for max line-height at locked font-size
+                    let lhLo = LH_MIN;
+                    let lhHi = LH_MAX;
+                    applyStyle(fontSize, lhHi);
+                    if (measure() <= PAGE_HEIGHT) {
+                        lhLo = lhHi;
+                    } else {
+                        for (let i = 0; i < 30; i++) {
+                            const mid = (lhLo + lhHi) / 2;
+                            applyStyle(fontSize, mid);
+                            if (measure() <= PAGE_HEIGHT) {
+                                lhLo = mid;
+                            } else {
+                                lhHi = mid;
+                            }
+                            if (lhHi - lhLo < 0.001) break;
+                        }
+                    }
+                    const lineHeight = Math.floor(lhLo * 1000) / 1000;
+
+                    // Apply final values
+                    applyStyle(fontSize, lineHeight);
+
+                    return { fontSize, lineHeight, contentHeight: measure() };
                 }"""
             )
+            print(
+                f"  Auto-fit: font-size={fit_result['fontSize']:.2f}pt, "
+                f"line-height={fit_result['lineHeight']:.3f}, "
+                f"content-height={fit_result['contentHeight']}px"
+            )
         except Exception as err:
-            print(f"⚠️  Spacing optimizer script failed: {err}")
+            print(f"⚠️  Auto-fit script failed: {err}")
 
-        # Measure the content height before generating the PDF
+        # Measure the content height after auto-fit
         content_height = page.evaluate("() => document.body.scrollHeight")
 
         page.pdf(

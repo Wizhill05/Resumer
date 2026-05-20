@@ -99,7 +99,6 @@ class ResumeRunController:
         *,
         jd_path: str,
         data_path: str,
-        max_iterations: int,
         job_label: str,
         model: str,
         api_key_env: str,
@@ -136,8 +135,6 @@ class ResumeRunController:
             jd_path,
             "--data",
             data_path,
-            "--max-iterations",
-            str(max_iterations),
             "--job-label",
             job_label,
             "--model",
@@ -444,14 +441,10 @@ class ResumeRunController:
             return line
         if "projects and experience agent:" in lower:
             return line
-        if "shortening agent:" in lower:
-            return line
 
-        # Make shortener phase explicit in logs.
+        # Surface draft iteration logs.
         if "draft iteration" in lower and "/" in line and not line.startswith("Draft"):
             return f"{line}"
-        if "shorten_resume" in lower:
-            return "Shortening"
 
         return line
 
@@ -499,16 +492,11 @@ class ResumeRunController:
         elif "experience agent:" in lower:
             self.status.active_agent = "experience_writer"
             self.status.active_task = "write_experience_section"
-        elif "shortening agent:" in lower:
-            self.status.active_agent = "resume_shortener"
-            self.status.active_task = "shorten_resume"
 
         if "Name:" in line:
             task_match = TASK_NAME_RE.search(line)
             if task_match and "write_resume" in task_match.group(1):
                 self.status.active_task = "write_resume"
-            elif task_match and "shorten_resume" in task_match.group(1):
-                self.status.active_task = "shorten_resume"
 
         if "Output folder:" in line:
             self.status.output_dir = line.split("Output folder:", 1)[1].strip()

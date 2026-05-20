@@ -2,7 +2,6 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { SECTIONS, DEFAULT_OMISSIONS, type Omissions, type SectionKey } from './ProfilesPage'
 
 const API = '/api'
-const MAX_ITERATIONS = 5
 
 interface ScrapedJob {
   id: string
@@ -57,11 +56,6 @@ function appendBatchLog(msg: string) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 export default function BatchProcessingPage() {
-  const clampIterations = useCallback((value: number) => {
-    if (!Number.isFinite(value)) return 1
-    return Math.max(1, Math.min(MAX_ITERATIONS, Math.trunc(value)))
-  }, [])
-
   const [users, setUsers] = useState<User[]>([])
   const [selectedUid, setSelectedUid] = useState<string>('')
   const [jobs, setJobs] = useState<ScrapedJob[]>([])
@@ -69,7 +63,6 @@ export default function BatchProcessingPage() {
 
   // Config options
   const [selectedPreset, setSelectedPreset] = useState('Mistral Large')
-  const [maxIter, setMaxIter] = useState(MAX_ITERATIONS)
   const [omissions, setOmissions] = useState<Omissions>({ ...DEFAULT_OMISSIONS })
 
   // Mirror module-level batch state into React state for re-renders
@@ -175,7 +168,6 @@ export default function BatchProcessingPage() {
               job_label: `${job.company} - ${job.title}`,
               model: preset.model,
               api_key_env: preset.key_env,
-              max_iterations: clampIterations(maxIter),
               omissions: omissions,
               mandatory_words: [],
             }),
@@ -294,15 +286,6 @@ export default function BatchProcessingPage() {
                 <select value={selectedPreset} onChange={e => setSelectedPreset(e.target.value)} style={selStyle} disabled={isProcessing}>
                   {Object.keys(MODEL_PRESETS).map(k => <option key={k}>{k}</option>)}
                 </select>
-              </div>
-              <div style={{ width: 80, flexShrink: 0 }}>
-                <div className="bp-label" style={{ marginBottom: 4 }}>MAX ITER</div>
-                <input
-                  type="number" value={maxIter} min={1} max={MAX_ITERATIONS}
-                  onChange={e => setMaxIter(clampIterations(Number(e.target.value)))}
-                  disabled={isProcessing}
-                  style={{ ...selStyle, height: 30, width: '100%' }}
-                />
               </div>
             </div>
 

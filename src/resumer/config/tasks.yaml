@@ -39,8 +39,8 @@ analyze_job:
 write_resume:
   description: >
     Legacy task retained only for CrewAI decorator compatibility. The active
-    pipeline uses analyze_job, write_summary_skills, write_resume_sections, and
-    shorten_resume instead.
+    pipeline uses analyze_job, write_summary_skills, and write_resume_sections
+    instead.
   expected_output: >
     A TailoredResume JSON object.
   agent: resume_writer
@@ -249,53 +249,3 @@ write_experience_section:
   expected_output: >
     A ExperienceDraft JSON object.
   agent: experience_writer
-
-shorten_resume:
-  description: >
-    The previous resume draft overflows by {overflow_lines} rendered lines.
-    Your goal is to help it fit on ONE page.
-
-    Your mission is to surgically trim AS LITTLE AS POSSIBLE.
-    This system runs in an iterative loop, so conservative trimming is preferred
-    over aggressive trimming.
-
-    LINE-COST REFERENCE MODEL (estimate only):
-    - Replace one long bullet with a tighter one-line bullet: saves ~0.5 to 1 line.
-    - Remove one experience bullet: saves ~1.5 to 2 lines.
-    - Tighten or remove one project point: saves ~1 line.
-    - Remove one project entry: saves ~4 to 6 lines.
-    - Remove one entire experience entry: saves ~5 to 7 lines.
-    - Remove one section header + body block: saves 2+ lines.
-
-    MINIMAL-CHANGE STRATEGY:
-    1. Estimate a cut plan targeting about {overflow_lines} lines.
-    2. Start with micro-edits only.
-    3. Remove whole bullets only if still needed after micro-edits.
-    4. Remove whole project/experience entries only when overflow is large.
-    5. Preserve required skills and ATS keywords wherever possible.
-
-    STRICT GUARDRAILS:
-    - Return the full valid TailoredResume JSON object.
-    - Do not rewrite from scratch.
-    - Prefer preserving Projects and Experience depth.
-    - Never remove more than one full entry in a single iteration.
-    - Keep at least 2 projects whenever possible.
-    - Bullet points must be optimized for page line breaks: write points that either fit comfortably on a single line (approx. 70-95 characters) OR form two full, balanced lines of text (approx. 140-180 characters). Explicitly avoid borderline lengths (approx. 100-125 characters) that overflow onto a second line with only 1-2 words.
-    - Keep a Soft Skills category if the skills section is present.
-    - If the skills section is present, keep exactly 15 individual skills total,
-      focused on the target job description.
-    - Preserve markdown bold on important quantified impact data in project,
-      experience, and achievement bullets when possible. Do not add bold to the
-      professional summary or skills.
-    - Do not introduce the words "intern" or "internship" in the professional
-      summary/objective; keep developer/engineer style wording.
-    - Do not touch education/personal info structure.
-
-    Resume JSON to trim:
-    {previous_json}
-
-    Target Job Description:
-    {job_description}
-  expected_output: >
-    The entire modified TailoredResume JSON object, containing all fields from previous_json but slightly shortened.
-  agent: resume_shortener

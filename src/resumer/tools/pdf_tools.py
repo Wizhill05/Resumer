@@ -38,13 +38,21 @@ def _render_template(profile: dict, resume_data: dict) -> str:
 
     resume_ns = _to_ns(resume_data)
 
+    template_path = str(_shared_state.get("template_path") or "").strip()
+    template_dir = JINJA_DIR
+    template_name = "base_resume.jinja2"
+    if template_path:
+        custom_template = Path(template_path)
+        template_dir = custom_template.parent
+        template_name = custom_template.name
+
     env = Environment(
-        loader=FileSystemLoader(str(JINJA_DIR)),
+        loader=FileSystemLoader(str(template_dir)),
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
-    template = env.get_template("base_resume.jinja2")
+    template = env.get_template(template_name)
     return template.render(profile=profile, resume=resume_ns)
 
 
@@ -71,13 +79,17 @@ def _get_overflow_lines(pdf_path: Path) -> int:
 _shared_state: dict = {
     "profile": {},
     "output_dir": "",
+    "template_path": "",
+    "css_path": "",
 }
 
 
-def set_shared_state(profile: dict, output_dir: str) -> None:
+def set_shared_state(profile: dict, output_dir: str, template_path: str = "", css_path: str = "") -> None:
     """Called by main.py to inject runtime data the tools need."""
     _shared_state["profile"] = profile
     _shared_state["output_dir"] = output_dir
+    _shared_state["template_path"] = template_path
+    _shared_state["css_path"] = css_path
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +129,14 @@ def compile_pdf(resume_json: str, iteration: str) -> str:
 
     # Compile PDF
     pdf_path = output_dir / f"draft_v{iteration}.pdf"
+
+    css_path_str = str(_shared_state.get("css_path") or "").strip()
+    if not css_path_str:
+        css_path_str = str(TEMPLATE_CSS)
+
     _, content_height = generate_pdf(
         md_path=str(md_path),
-        css_path=str(TEMPLATE_CSS),
+        css_path=css_path_str,
         output_path=str(pdf_path),
     )
 
@@ -147,13 +164,19 @@ def check_page_count(pdf_path: str) -> str:
     # If the path is a directory (LLM passed the folder instead of a file),
     # find the most recent draft PDF inside it.
     if p.is_dir():
-        candidates = sorted(p.glob("draft_v*.pdf"))
+        candidates = sorted(
+            p.glob("draft_v*.pdf"),
+            key=lambda x: int(x.stem[7:]) if x.stem.startswith("draft_v") and x.stem[7:].isdigit() else 0
+        )
         if candidates:
             p = candidates[-1]
         else:
             # Also check the shared output dir as a fallback
             output_dir = Path(_shared_state["output_dir"])
-            candidates = sorted(output_dir.glob("draft_v*.pdf"))
+            candidates = sorted(
+                output_dir.glob("draft_v*.pdf"),
+                key=lambda x: int(x.stem[7:]) if x.stem.startswith("draft_v") and x.stem[7:].isdigit() else 0
+            )
             if candidates:
                 p = candidates[-1]
             else:
@@ -165,7 +188,10 @@ def check_page_count(pdf_path: str) -> str:
     elif not p.is_file():
         # Path does not exist at all — search the shared output dir
         output_dir = Path(_shared_state["output_dir"])
-        candidates = sorted(output_dir.glob("draft_v*.pdf"))
+        candidates = sorted(
+            output_dir.glob("draft_v*.pdf"),
+            key=lambda x: int(x.stem[7:]) if x.stem.startswith("draft_v") and x.stem[7:].isdigit() else 0
+        )
         if candidates:
             p = candidates[-1]
         else:

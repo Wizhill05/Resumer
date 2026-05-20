@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 
 // ── Types & constants ──────────────────────────────────────────────────────
 interface User {
   id: string
   display_name: string
   created_at: string
+}
+interface ResumeTemplate {
+  id: string
+  name: string
+  content: string
+  css_content: string
+  is_default: boolean
+  updated_at: string
 }
 
 const API = '/api'
@@ -41,7 +50,7 @@ export default function ProfilesPage() {
   const [newName, setNewName] = useState('')
 
   // Tab
-  const [activeTab, setActiveTab] = useState<'truth' | 'defaults'>('truth')
+  const [activeTab, setActiveTab] = useState<'truth' | 'defaults' | 'templates'>('truth')
 
   // Truth JSON editor
   const [truthText, setTruthText] = useState('')
@@ -54,6 +63,15 @@ export default function ProfilesPage() {
   const [omissions, setOmissions] = useState<Omissions>({ ...DEFAULT_OMISSIONS })
   const [prefStatus, setPrefStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Jinja templates
+  const [templates, setTemplates] = useState<ResumeTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [templateContent, setTemplateContent] = useState('')
+  const [templateCssContent, setTemplateCssContent] = useState('')
+  const [templateView, setTemplateView] = useState<'html' | 'css'>('html')
+  const [templateStatus, setTemplateStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
 
   useEffect(() => { fetchUsers() }, [])
 
@@ -71,17 +89,23 @@ export default function ProfilesPage() {
     setLoading(true)
     setJsonError(null)
     try {
-      const [truthRes, prefRes] = await Promise.all([
+      const [truthRes, prefRes, templateRes] = await Promise.all([
         fetch(`${API}/users/${uid}/truth`),
         fetch(`${API}/users/${uid}/preferences`),
+        fetch(`${API}/users/${uid}/templates`),
       ])
       const truthData = await truthRes.json()
       const prefData = await prefRes.json()
+      const templateData: ResumeTemplate[] = await templateRes.json()
       setTruthText(JSON.stringify(truthData, null, 2))
       setOmissions({ ...DEFAULT_OMISSIONS, ...prefData })
+      setTemplates(templateData)
+      selectTemplate(templateData.find(t => t.is_default)?.id ?? templateData[0]?.id ?? '', templateData)
     } catch {
       setTruthText('{}')
       setOmissions({ ...DEFAULT_OMISSIONS })
+      setTemplates([])
+      selectTemplate('', [])
     } finally {
       setLoading(false)
     }
@@ -148,6 +172,73 @@ export default function ProfilesPage() {
     setPrefStatus('idle')
   }
 
+  function selectTemplate(id: string, source = templates) {
+    const template = source.find(t => t.id === id)
+    setSelectedTemplateId(template?.id ?? '')
+    setTemplateName(template?.name ?? '')
+    setTemplateContent(template?.content ?? '')
+    setTemplateCssContent(template?.css_content ?? '')
+    setTemplateStatus('idle')
+  }
+
+  async function refreshTemplates(uid = selectedUid) {
+    if (!uid) return
+    const res = await fetch(`${API}/users/${uid}/templates`)
+    const data: ResumeTemplate[] = await res.json()
+    setTemplates(data)
+    return data
+  }
+
+  async function addTemplate() {
+    if (!selectedUid) return
+    setTemplateStatus('saving')
+    try {
+      const seed = templateContent || templates.find(t => t.is_default)?.content || ''
+      const res = await fetch(`${API}/users/${selectedUid}/templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Template', content: seed, css_content: '', is_default: templates.length === 0 }),
+      })
+      if (!res.ok) throw new Error()
+      const created: ResumeTemplate = await res.json()
+      const data = await refreshTemplates()
+      selectTemplate(created.id, data)
+      setTemplateStatus('saved')
+    } catch { setTemplateStatus('error') }
+  }
+
+  async function saveTemplate() {
+    if (!selectedUid || !selectedTemplateId) return
+    setTemplateStatus('saving')
+    try {
+      const current = templates.find(t => t.id === selectedTemplateId)
+      const res = await fetch(`${API}/users/${selectedUid}/templates/${selectedTemplateId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: templateName, content: templateContent, css_content: templateCssContent, is_default: current?.is_default ?? false }),
+      })
+      if (!res.ok) throw new Error()
+      const data = await refreshTemplates()
+      selectTemplate(selectedTemplateId, data)
+      setTemplateStatus('saved')
+    } catch { setTemplateStatus('error') }
+  }
+
+  async function deleteTemplate() {
+    if (!selectedUid || !selectedTemplateId) return
+    if (!confirm('Delete this resume template?')) return
+    await fetch(`${API}/users/${selectedUid}/templates/${selectedTemplateId}`, { method: 'DELETE' })
+    const data = await refreshTemplates()
+    selectTemplate(data?.find(t => t.is_default)?.id ?? data?.[0]?.id ?? '', data)
+  }
+
+  async function setDefaultTemplate() {
+    if (!selectedUid || !selectedTemplateId) return
+    await fetch(`${API}/users/${selectedUid}/templates/${selectedTemplateId}/default`, { method: 'PUT' })
+    const data = await refreshTemplates()
+    selectTemplate(selectedTemplateId, data)
+  }
+
   const selectedUser = users.find(u => u.id === selectedUid)
   const lineCount = truthText.split('\n').length
 
@@ -202,7 +293,7 @@ export default function ProfilesPage() {
 
         {/* Tab bar */}
         <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid var(--line)', background: 'var(--bg-panel)', flexShrink: 0 }}>
-          {(['truth', 'defaults'] as const).map(tab => (
+          {(['truth', 'defaults', 'templates'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -221,7 +312,7 @@ export default function ProfilesPage() {
                 cursor: 'pointer',
               }}
             >
-              {tab === 'truth' ? '01 / TRUTH.JSON' : '02 / DEFAULTS'}
+              {tab === 'truth' ? '01 / TRUTH.JSON' : tab === 'defaults' ? '02 / DEFAULTS' : '03 / TEMPLATES'}
             </button>
           ))}
           {selectedUser && (
@@ -366,7 +457,110 @@ export default function ProfilesPage() {
             )}
           </div>
         )}
+
+        {activeTab === 'templates' && (
+          <div style={{ flex: 1, overflow: 'hidden', display: 'grid', gridTemplateColumns: '260px 1fr' }}>
+            <div style={{ borderRight: '1px solid var(--line)', background: 'var(--bg-panel)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: 12, borderBottom: '1px solid var(--line)' }}>
+                <button className="btn-primary" onClick={addTemplate} disabled={!selectedUid} style={{ width: '100%' }}>ADD TEMPLATE</button>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto' }}>
+                {templates.map(t => (
+                  <div
+                    key={t.id}
+                    onClick={() => selectTemplate(t.id)}
+                    style={{
+                      padding: '10px 14px',
+                      borderBottom: '1px solid var(--line-dim)',
+                      cursor: 'pointer',
+                      background: t.id === selectedTemplateId ? 'rgba(12,84,165,0.14)' : 'transparent',
+                      borderLeft: t.id === selectedTemplateId ? '2px solid var(--cyan-bright)' : '2px solid transparent',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 700, color: t.id === selectedTemplateId ? 'var(--cyan-bright)' : 'var(--white)', marginBottom: 3 }}>
+                      {t.name}
+                    </div>
+                    <div style={{ color: t.is_default ? 'var(--green)' : 'var(--muted)', fontSize: 10 }}>
+                      {t.is_default ? 'DEFAULT' : new Date(t.updated_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, padding: '0 16px', borderBottom: '1px solid var(--line)', background: 'var(--bg-panel)', flexShrink: 0 }}>
+                <input
+                  value={templateName}
+                  onChange={e => { setTemplateName(e.target.value); setTemplateStatus('idle') }}
+                  placeholder="Template name"
+                  style={{ ...inputStyle, maxWidth: 360 }}
+                  disabled={!selectedTemplateId}
+                />
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {templateStatus === 'saved' && <span style={{ color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>SAVED</span>}
+                  {templateStatus === 'error' && <span style={{ color: 'var(--red)', fontSize: 10, fontWeight: 700 }}>SAVE FAILED</span>}
+                  
+                  {selectedTemplateId && (
+                    <div style={{ display: 'flex', background: 'var(--bg-input)', padding: 2, borderRadius: 2, border: '1px solid var(--line)', marginRight: 16 }}>
+                      <button 
+                        onClick={() => setTemplateView('html')}
+                        style={{ background: templateView === 'html' ? 'var(--line)' : 'transparent', border: 'none', color: templateView === 'html' ? 'var(--white)' : 'var(--muted)', fontSize: 10, padding: '2px 8px', fontWeight: 700, cursor: 'pointer' }}
+                      >JINJA</button>
+                      <button 
+                        onClick={() => setTemplateView('css')}
+                        style={{ background: templateView === 'css' ? 'var(--line)' : 'transparent', border: 'none', color: templateView === 'css' ? 'var(--white)' : 'var(--muted)', fontSize: 10, padding: '2px 8px', fontWeight: 700, cursor: 'pointer' }}
+                      >CSS</button>
+                    </div>
+                  )}
+
+                  <button className="btn-ghost" onClick={setDefaultTemplate} disabled={!selectedTemplateId}>SET DEFAULT</button>
+                  <button className="btn-ghost" onClick={deleteTemplate} disabled={!selectedTemplateId} style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>DELETE</button>
+                  <button className="btn-primary" onClick={saveTemplate} disabled={!selectedTemplateId || templateStatus === 'saving'}>
+                    {templateStatus === 'saving' ? 'SAVING...' : 'SAVE'}
+                  </button>
+                </div>
+              </div>
+              {selectedTemplateId ? (
+                templateView === 'html' ? (
+                  <textarea
+                    value={templateContent}
+                    onChange={e => { setTemplateContent(e.target.value); setTemplateStatus('idle') }}
+                    spellCheck={false}
+                    style={{ flex: 1, resize: 'none', border: 'none', padding: 14, fontSize: 12, lineHeight: 1.6, background: 'var(--bg-input)', color: 'var(--white)' }}
+                  />
+                ) : (
+                  <textarea
+                    value={templateCssContent}
+                    onChange={e => { setTemplateCssContent(e.target.value); setTemplateStatus('idle') }}
+                    spellCheck={false}
+                    placeholder="/* Custom CSS for this template. Leave empty to use default styles. */"
+                    style={{ flex: 1, resize: 'none', border: 'none', padding: 14, fontSize: 12, lineHeight: 1.6, background: 'var(--bg-input)', color: 'var(--white)' }}
+                  />
+                )
+              ) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: 11 }}>
+                  SELECT OR ADD A TEMPLATE
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
+}
+
+const inputStyle: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 11,
+  fontWeight: 600,
+  color: 'var(--white)',
+  background: 'var(--bg-input)',
+  border: '1px solid var(--line)',
+  padding: '4px 8px',
+  height: 30,
+  outline: 'none',
+  width: '100%',
+  borderRadius: 0,
 }

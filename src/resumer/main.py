@@ -31,11 +31,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import re
 import shutil
 import sys
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -63,8 +66,9 @@ from pydantic import BaseModel  # noqa: E402
 
 from schemas.resume_schema import (  # noqa: E402
     ActivityGroup,
+    ExperienceDraft,
     JobAnalysis,
-    ResumeSectionsDraft,
+    ProjectsDraft,
     SkillCategory,
     SummarySkillsDraft,
     TailoredExperience,
@@ -119,6 +123,131 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent  # project root
 MAX_SHORTENING_ITERATIONS = 5
 TARGET_INDIVIDUAL_SKILLS = 15
 TModel = TypeVar("TModel", bound=BaseModel)
+_PROJECT_ACTION_VERBS = {
+    "accelerated",
+    "automated",
+    "built",
+    "created",
+    "delivered",
+    "designed",
+    "developed",
+    "enabled",
+    "engineered",
+    "implemented",
+    "improved",
+    "integrated",
+    "launched",
+    "led",
+    "optimized",
+    "reduced",
+    "scaled",
+    "streamlined",
+    "strengthened",
+}
+_PROJECT_ACTION_VERB_FALLBACKS = ("Built", "Optimized", "Delivered")
+_MODEL_TRACE_PATH: Path | None = None
+_MODEL_TRACE_LOCK = threading.Lock()
+_MODEL_TRACE_ENTRY_INDEX = 0
+_MODEL_TRACE_CONTEXT: dict[str, Any] = {}
+
+
+def _to_trace_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        return json.dumps({"repr": repr(value)}, ensure_ascii=False, indent=2)
+
+
+def _escape_fenced_text(text: str) -> str:
+    return text.replace("```", "``\\`")
+
+
+def _init_model_trace_artifact(
+    *,
+    output_dir: Path,
+    model: str,
+    job_label: str,
+    profile_name: str,
+    job_description: str,
+) -> None:
+    global _MODEL_TRACE_PATH, _MODEL_TRACE_ENTRY_INDEX, _MODEL_TRACE_CONTEXT
+    jd_sha256 = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    trace_path = output_dir / "model_conversations.md"
+    header = (
+        "# Model Conversation Logs\n\n"
+        f"- **Model:** `{model}`\n"
+        f"- **Run Label:** `{job_label}`\n"
+        f"- **Profile:** `{profile_name}`\n"
+        f"- **Job Description SHA-256:** `{jd_sha256}`\n"
+        f"- **Job Description Chars:** `{len(job_description)}`\n\n"
+        "## Job Description Context\n\n"
+        "```text\n"
+        f"{_escape_fenced_text(job_description)}\n"
+        "```\n\n"
+        "---\n"
+    )
+    try:
+        trace_path.write_text(header, encoding="utf-8")
+    except Exception as exc:
+        _warn(f"Could not initialize model conversation log: {exc}")
+        _MODEL_TRACE_PATH = None
+        _MODEL_TRACE_ENTRY_INDEX = 0
+        _MODEL_TRACE_CONTEXT = {}
+        return
+    _MODEL_TRACE_PATH = trace_path
+    _MODEL_TRACE_ENTRY_INDEX = 0
+    _MODEL_TRACE_CONTEXT = {
+        "jd_sha256": jd_sha256,
+        "jd_chars": len(job_description),
+    }
+
+
+def _append_model_trace_entry(
+    *,
+    label: str,
+    crew_method_name: str,
+    attempt: int,
+    attempts: int,
+    inputs: dict[str, Any],
+    output_text: str = "",
+    error_text: str = "",
+) -> None:
+    global _MODEL_TRACE_ENTRY_INDEX
+    if _MODEL_TRACE_PATH is None:
+        return
+    with _MODEL_TRACE_LOCK:
+        _MODEL_TRACE_ENTRY_INDEX += 1
+        index = _MODEL_TRACE_ENTRY_INDEX
+        timestamp = datetime.now(timezone.utc).isoformat()
+        jd_sha256 = str(_MODEL_TRACE_CONTEXT.get("jd_sha256", ""))
+        jd_chars = int(_MODEL_TRACE_CONTEXT.get("jd_chars", 0) or 0)
+        section = (
+            f"\n## {index}. {label} (`{crew_method_name}`) — attempt {attempt}/{attempts}\n\n"
+            f"- **Timestamp (UTC):** `{timestamp}`\n"
+            f"- **Linked Job Description SHA-256:** `{jd_sha256}`\n"
+            f"- **Linked Job Description Chars:** `{jd_chars}`\n\n"
+            "### Inputs\n\n"
+            "```json\n"
+            f"{_to_trace_json(inputs)}\n"
+            "```\n\n"
+        )
+        if output_text.strip():
+            section += (
+                "### Model Output (raw)\n\n"
+                "```text\n"
+                f"{_escape_fenced_text(output_text)}\n"
+                "```\n\n"
+            )
+        if error_text.strip():
+            section += (
+                "### Error\n\n"
+                "```text\n"
+                f"{_escape_fenced_text(error_text)}\n"
+                "```\n\n"
+            )
+        section += "---\n"
+        with _MODEL_TRACE_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(section)
 
 
 def _sanitize_folder_name(name: str) -> str:
@@ -504,23 +633,36 @@ def _assemble_tailored_resume(
     *,
     job_analysis: JobAnalysis,
     summary_skills: SummarySkillsDraft,
-    sections: ResumeSectionsDraft,
+    projects_draft: ProjectsDraft,
+    experience_draft: ExperienceDraft,
     profile_project_links: set[str],
 ) -> str:
     projects: list[TailoredProject] = []
-    for key, project in sections.projects.items():
+    for key, project in projects_draft.projects.items():
         name = project.name.strip() or key.replace("_", " ").title()
         url = _link_allowed_for_profile(project.link, profile_project_links)
+        source_points = _split_project_description_points(project.points)
+        if not source_points and isinstance(project.description, str):
+            source_points = _split_project_description_points(project.description)
+        normalized_points = _ensure_project_point_count(
+            source_points,
+            project_name=name,
+            project_domain=project.domain,
+        )
+        if not normalized_points:
+            continue
         projects.append(
             TailoredProject(
                 name=name,
+                project_summary=project.project_summary,
+                completion_time=project.completion_time,
                 link=url,
                 github_path=_normalize_github_path(url),
-                description=_strip_markdown_artifacts(project.description),
+                points=normalized_points,
             )
         )
 
-    raw_experience = list(sections.work_experience.values())
+    raw_experience = list(experience_draft.work_experience.values())
     normal_experience = [
         item for item in raw_experience if not _is_independent_projects_experience(item)
     ]
@@ -533,7 +675,11 @@ def _assemble_tailored_resume(
 
     experience: list[TailoredExperience] = []
     for item in selected_experience:
-        bullets = [_strip_markdown_artifacts(point) for point in item.points if point.strip()]
+        bullets = [
+            _strip_markdown_artifacts(point, preserve_bold=True)
+            for point in item.points
+            if point.strip()
+        ]
         if not bullets:
             continue
         experience.append(
@@ -548,8 +694,8 @@ def _assemble_tailored_resume(
 
     activities = []
     activity_bullets = [
-        _strip_markdown_artifacts(item)
-        for item in sections.extra_curricular
+        _strip_markdown_artifacts(item, preserve_bold=True)
+        for item in summary_skills.extra_curricular
         if str(item).strip()
     ]
     if activity_bullets:
@@ -643,10 +789,31 @@ def _kickoff_with_retries(
             _info(f"{label}: starting attempt {attempt}/{attempts}")
             crew_instance = ResumerCrew()
             crew_method = getattr(crew_instance, crew_method_name)
-            return crew_method().kickoff(inputs=inputs)
+            result = crew_method().kickoff(inputs=inputs)
+            try:
+                output_text = _result_to_raw_text(result)
+            except Exception:
+                output_text = str(result)
+            _append_model_trace_entry(
+                label=label,
+                crew_method_name=crew_method_name,
+                attempt=attempt,
+                attempts=attempts,
+                inputs=inputs,
+                output_text=output_text,
+            )
+            return result
         except Exception as exc:
             last_error = exc
             _warn(f"{label}: attempt {attempt}/{attempts} failed: {exc}")
+            _append_model_trace_entry(
+                label=label,
+                crew_method_name=crew_method_name,
+                attempt=attempt,
+                attempts=attempts,
+                inputs=inputs,
+                error_text=str(exc),
+            )
             if attempt < attempts:
                 time.sleep(delay_seconds)
     if last_error:
@@ -654,7 +821,7 @@ def _kickoff_with_retries(
     raise RuntimeError(f"{label} failed without an exception")
 
 
-async def _run_summary_and_sections(
+async def _run_summary_projects_and_experience(
     *,
     job_analysis_json: str,
     truth_skills_json: str,
@@ -662,15 +829,22 @@ async def _run_summary_and_sections(
     mandatory_words_text: str,
     agent_instructions_text: str,
     attempt_feedback: str,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, Any]:
     summary_inputs = {
         "job_analysis_json": job_analysis_json,
+        "profile_json": profile_json,
         "truth_skills_json": truth_skills_json,
         "mandatory_words": mandatory_words_text,
         "agent_instructions": agent_instructions_text,
         "attempt_feedback": attempt_feedback,
     }
-    section_inputs = {
+    projects_inputs = {
+        "job_analysis_json": job_analysis_json,
+        "profile_json": profile_json,
+        "agent_instructions": agent_instructions_text,
+        "attempt_feedback": attempt_feedback,
+    }
+    experience_inputs = {
         "job_analysis_json": job_analysis_json,
         "profile_json": profile_json,
         "agent_instructions": agent_instructions_text,
@@ -684,16 +858,25 @@ async def _run_summary_and_sections(
         label="Summary and skills agent",
     )
 
-    async def delayed_sections() -> Any:
+    async def delayed_projects() -> Any:
         await asyncio.sleep(5)
         return await asyncio.to_thread(
             _kickoff_with_retries,
-            crew_method_name="resume_sections_crew",
-            inputs=section_inputs,
-            label="Projects and experience agent",
+            crew_method_name="projects_crew",
+            inputs=projects_inputs,
+            label="Projects agent",
         )
 
-    return await asyncio.gather(summary_task, delayed_sections())
+    async def delayed_experience() -> Any:
+        await asyncio.sleep(10)
+        return await asyncio.to_thread(
+            _kickoff_with_retries,
+            crew_method_name="experience_crew",
+            inputs=experience_inputs,
+            label="Experience agent",
+        )
+
+    return await asyncio.gather(summary_task, delayed_projects(), delayed_experience())
 
 
 def _infer_applying_for_from_jd(job_description: str) -> str | None:
@@ -804,11 +987,19 @@ def _infer_applying_for_from_jd(job_description: str) -> str | None:
     return sorted(cleaned_candidates, key=lambda role: (len(role.split()), len(role)))[0]
 
 
-def _strip_markdown_artifacts(text: str) -> str:
+def _strip_markdown_artifacts(text: str, *, preserve_bold: bool = False) -> str:
     """
     Convert markdown-ish inline formatting to plain text for fields that should
     render as normal prose (e.g., project descriptions).
     """
+    protected_bold: list[str] = []
+    if preserve_bold:
+        def protect(match: re.Match[str]) -> str:
+            protected_bold.append(match.group(0))
+            return f"@@BOLDTOKEN{len(protected_bold) - 1}@@"
+
+        text = re.sub(r"\*\*(?!\s).+?(?<!\s)\*\*", protect, text)
+
     # Links: [text](url) -> text
     cleaned = re.sub(r"\[([^\]]+)\]\((?:[^)]+)\)", r"\1", text)
     # Inline code: `text` -> text
@@ -819,7 +1010,126 @@ def _strip_markdown_artifacts(text: str) -> str:
     # Flatten accidental list markers into plain prose
     cleaned = re.sub(r"(?m)^\s*[-•]\s+", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if preserve_bold:
+        for index, value in enumerate(protected_bold):
+            cleaned = cleaned.replace(f"@@BOLDTOKEN{index}@@", value)
     return cleaned
+
+
+def _split_project_description_points(description: Any) -> list[str]:
+    if isinstance(description, list):
+        chunks = [
+            re.sub(
+                r"^\s*(?:[-•*]|\d+[.)])\s*",
+                "",
+                _strip_markdown_artifacts(str(point), preserve_bold=True),
+            ).strip(" ;")
+            for point in description
+            if str(point).strip()
+        ]
+        return [chunk for chunk in chunks if chunk][:3]
+
+    if not isinstance(description, str):
+        return []
+
+    cleaned = _strip_markdown_artifacts(description, preserve_bold=True)
+    if not cleaned:
+        return []
+
+    normalized_numbers = re.sub(r"\s*(\d+)[.)]\s+", r"\n\1. ", cleaned)
+    chunks = [
+        re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", chunk).strip()
+        for chunk in re.split(r"[\r\n]+", normalized_numbers)
+        if chunk.strip()
+    ]
+    if len(chunks) < 3:
+        sentence_chunks = [
+            sentence.strip(" ;")
+            for sentence in re.split(r"(?<=[.!?;])\s+", cleaned)
+            if sentence.strip(" ;")
+        ]
+        if len(sentence_chunks) > len(chunks):
+            chunks = sentence_chunks
+
+    while len(chunks) < 3:
+        split_done = False
+        for index, chunk in enumerate(list(chunks)):
+            parts = [
+                part.strip(" ,;")
+                for part in re.split(r",\s+|\s+and\s+", chunk, maxsplit=1)
+                if part.strip(" ,;")
+            ]
+            if len(parts) > 1:
+                chunks[index : index + 1] = parts
+                split_done = True
+                break
+        if not split_done:
+            break
+
+    return [chunk for chunk in chunks if chunk][:3]
+
+
+def _ensure_project_action_verb(point: str, fallback_verb: str) -> str:
+    cleaned = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", point).strip(" ;")
+    if not cleaned:
+        return ""
+
+    first_word_match = re.match(r"[A-Za-z]+", cleaned)
+    first_word = first_word_match.group(0).lower() if first_word_match else ""
+    if first_word not in _PROJECT_ACTION_VERBS:
+        cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+        cleaned = f"{fallback_verb} {cleaned}".strip()
+
+    cleaned = cleaned.rstrip(".")
+    return f"{cleaned}."
+
+
+def _normalize_project_points(points: list[str]) -> list[str]:
+    formatted_points: list[str] = []
+    for index, point in enumerate(points[:3]):
+        fallback_verb = _PROJECT_ACTION_VERB_FALLBACKS[
+            min(index, len(_PROJECT_ACTION_VERB_FALLBACKS) - 1)
+        ]
+        normalized = _ensure_project_action_verb(str(point), fallback_verb)
+        if normalized:
+            formatted_points.append(normalized)
+    return formatted_points
+
+
+def _ensure_project_point_count(
+    points: list[str],
+    *,
+    project_name: str,
+    project_domain: str | None,
+) -> list[str]:
+    normalized = _normalize_project_points(points)
+    if len(normalized) >= 3:
+        return normalized[:3]
+
+    domain_text = (project_domain or "target role").strip()
+    fallback_templates = [
+        f"Built {project_name} to address {domain_text} requirements.",
+        "Implemented scalable workflows and clear system integration boundaries.",
+        "Optimized reliability through iterative improvements and production-focused engineering practices.",
+    ]
+    for template in fallback_templates:
+        if len(normalized) >= 3:
+            break
+        normalized.extend(_normalize_project_points([template]))
+    return normalized[:3]
+
+
+def _project_points_from_entry(project: dict[str, Any]) -> list[str]:
+    points = _split_project_description_points(project.get("points"))
+    if points:
+        return points
+    return _split_project_description_points(project.get("description"))
+
+
+def _set_project_points_in_entry(project: dict[str, Any], points: list[str]) -> None:
+    normalized_points = _normalize_project_points(_split_project_description_points(points))
+    project["points"] = normalized_points
+    project.pop("description", None)
 
 
 def _coerce_tailored_resume_payload(
@@ -880,6 +1190,16 @@ def _coerce_tailored_resume_payload(
             if not isinstance(project, dict):
                 continue
             p = dict(project)
+            if not p.get("project_summary"):
+                for summary_key in ("summary", "projectSummary", "short_summary"):
+                    if isinstance(p.get(summary_key), str) and p.get(summary_key).strip():
+                        p["project_summary"] = p.get(summary_key).strip()
+                        break
+            if not p.get("completion_time"):
+                for time_key in ("completed_at", "completion", "completion_date", "time"):
+                    if isinstance(p.get(time_key), str) and p.get(time_key).strip():
+                        p["completion_time"] = p.get(time_key).strip()
+                        break
             if not p.get("link") and isinstance(p.get("github"), str):
                 p["link"] = p["github"]
             if not p.get("link") and isinstance(p.get("url"), str):
@@ -891,9 +1211,19 @@ def _coerce_tailored_resume_payload(
                     p.get("link"),
                     profile_project_links,
                 ) or ""
-            description = p.get("description")
-            if isinstance(description, str) and description.strip():
-                p["description"] = _strip_markdown_artifacts(description)
+            normalized_points = _normalize_project_points(_project_points_from_entry(p))
+            if not normalized_points:
+                normalized_points = _ensure_project_point_count(
+                    [],
+                    project_name=str(p.get("name") or "Project").strip() or "Project",
+                    project_domain=(
+                        str(p.get("domain")).strip()
+                        if p.get("domain") is not None
+                        else None
+                    ),
+                )
+            p["points"] = normalized_points
+            p.pop("description", None)
             normalized_projects.append(p)
         payload["projects"] = normalized_projects or None
 
@@ -1015,75 +1345,287 @@ def _ensure_minimum_skills_in_resume_json(
     return TailoredResume.model_validate(parsed).model_dump_json()
 
 
-def _remove_experience_third_bullet(
+def _remove_experience_bullet(
     resume_data: dict[str, Any],
     *,
-    experience_index: int,
+    bullet_index: int,
+    preferred_experience_index: int | None = None,
 ) -> dict[str, Any] | None:
     experiences = resume_data.get("experience")
-    if not isinstance(experiences, list) or len(experiences) <= experience_index:
-        return None
-    experience = experiences[experience_index]
-    if not isinstance(experience, dict):
+    if not isinstance(experiences, list):
         return None
 
-    bullets = experience.get("bullets")
-    if not isinstance(bullets, list) or len(bullets) < 3:
+    if preferred_experience_index is not None:
+        if preferred_experience_index < 0 or preferred_experience_index >= len(experiences):
+            return None
+        candidate_indexes = [preferred_experience_index]
+    else:
+        candidate_indexes = list(range(len(experiences)))
+
+    for experience_index in candidate_indexes:
+        experience = experiences[experience_index]
+        if not isinstance(experience, dict):
+            continue
+        bullets = experience.get("bullets")
+        if not isinstance(bullets, list) or len(bullets) <= bullet_index:
+            continue
+        removed = bullets.pop(bullet_index)
+        role = str(experience.get("role") or f"experience {experience_index + 1}").strip()
+        organization = str(experience.get("organization") or "").strip()
+        label_target = f"{role} @ {organization}" if organization else role
+        ordinal = "first" if bullet_index == 0 else "second"
+        return {
+            "kind": "experience_bullet",
+            "label": f"Removed {ordinal} bullet from {label_target}",
+            "experience_index": experience_index,
+            "experience_role": role,
+            "experience_organization": organization,
+            "item_index": bullet_index,
+            "value": removed,
+        }
+
+    return None
+
+
+def _remove_one_experience_bullet(resume_data: dict[str, Any]) -> dict[str, Any] | None:
+    removal_attempts: list[tuple[int, int | None]] = [
+        (1, 0),
+        (1, 1),
+        (0, 0),
+        (0, 1),
+        (1, None),
+        (0, None),
+    ]
+    for bullet_index, preferred_experience_index in removal_attempts:
+        edit = _remove_experience_bullet(
+            resume_data,
+            bullet_index=bullet_index,
+            preferred_experience_index=preferred_experience_index,
+        )
+        if edit:
+            return edit
+    return None
+
+
+def _remove_project_bullet(
+    resume_data: dict[str, Any],
+    *,
+    project_index: int,
+) -> dict[str, Any] | None:
+    projects = resume_data.get("projects")
+    if not isinstance(projects, list) or len(projects) <= project_index:
         return None
-    removed = bullets.pop(2)
-    role = str(experience.get("role") or f"experience {experience_index + 1}")
-    organization = str(experience.get("organization") or "").strip()
-    label_target = f"{role} @ {organization}" if organization else role
+    project = projects[project_index]
+    if not isinstance(project, dict):
+        return None
+    points = _project_points_from_entry(project)
+    if len(points) <= 1:
+        return None
+
+    removed = points.pop()
+    _set_project_points_in_entry(project, points)
+    project_name = project.get("name") or f"project {project_index + 1}"
     return {
-        "kind": "experience_bullet",
-        "label": f"Removed third bullet from {label_target}",
-        "experience_index": experience_index,
-        "item_index": 2,
+        "kind": "project_bullet",
+        "label": f"Removed one bullet from project {project_index + 1}: {project_name}",
+        "project_index": project_index,
+        "project_name": str(project_name).strip(),
+        "item_index": len(points),
         "value": removed,
     }
 
 
-def _remove_third_project(resume_data: dict[str, Any]) -> dict[str, Any] | None:
+def _remove_last_project(resume_data: dict[str, Any]) -> dict[str, Any] | None:
     projects = resume_data.get("projects")
-    if not isinstance(projects, list) or len(projects) < 3:
+    if not isinstance(projects, list) or len(projects) < 1:
         return None
-    removed = projects.pop(2)
-    removed_name = removed.get("name") if isinstance(removed, dict) else "third project"
+    removed_index = len(projects) - 1
+    removed = projects.pop(removed_index)
+    removed_name = removed.get("name") if isinstance(removed, dict) else "project"
     return {
         "kind": "project_entry",
-        "label": f"Removed third project: {removed_name}",
-        "project_index": 2,
+        "label": f"Removed project {removed_index + 1}: {removed_name}",
+        "project_index": removed_index,
         "value": removed,
     }
+
+
+def _find_and_remove_next_bullet(resume_data: dict[str, Any]) -> dict[str, Any] | None:
+    # 1. Look for project entries with > 2 bullets, starting from the last project
+    projects = resume_data.get("projects")
+    if isinstance(projects, list):
+        for i in reversed(range(len(projects))):
+            project = projects[i]
+            if isinstance(project, dict):
+                points = _project_points_from_entry(project)
+                if len(points) > 2:  # Keep at least 2 bullets
+                    removed = points.pop()
+                    _set_project_points_in_entry(project, points)
+                    project_name = project.get("name") or f"project {i + 1}"
+                    return {
+                        "kind": "project_bullet",
+                        "label": f"Removed one bullet from project {i + 1}: {project_name}",
+                        "project_index": i,
+                        "project_name": str(project_name).strip(),
+                        "item_index": len(points),
+                        "value": removed,
+                    }
+
+    # 2. Look for experience entries with > 2 bullets, starting from the last experience
+    experiences = resume_data.get("experience")
+    if isinstance(experiences, list):
+        for i in reversed(range(len(experiences))):
+            experience = experiences[i]
+            if isinstance(experience, dict):
+                bullets = experience.get("bullets")
+                if isinstance(bullets, list) and len(bullets) > 2:  # Keep at least 2 bullets
+                    removed = bullets.pop()
+                    role = str(experience.get("role") or f"experience {i + 1}").strip()
+                    organization = str(experience.get("organization") or "").strip()
+                    label_target = f"{role} @ {organization}" if organization else role
+                    return {
+                        "kind": "experience_bullet",
+                        "label": f"Removed one bullet from {label_target}",
+                        "experience_index": i,
+                        "experience_role": role,
+                        "experience_organization": organization,
+                        "item_index": len(bullets),
+                        "value": removed,
+                    }
+
+    return None
 
 
 def _restore_local_shortening_edit(
     resume_data: dict[str, Any],
     edit: dict[str, Any],
 ) -> bool:
+    def _resolve_experience(
+        experiences: list[Any],
+        *,
+        experience_index: int,
+        role_anchor: str,
+        org_anchor: str,
+    ) -> dict[str, Any] | None:
+        if 0 <= experience_index < len(experiences):
+            candidate = experiences[experience_index]
+            if isinstance(candidate, dict):
+                candidate_role = str(candidate.get("role") or "").strip().casefold()
+                candidate_org = str(candidate.get("organization") or "").strip().casefold()
+                if (not role_anchor or candidate_role == role_anchor) and (
+                    not org_anchor or candidate_org == org_anchor
+                ):
+                    return candidate
+
+        if not role_anchor and not org_anchor:
+            return None
+
+        for candidate in experiences:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_role = str(candidate.get("role") or "").strip().casefold()
+            candidate_org = str(candidate.get("organization") or "").strip().casefold()
+            if (not role_anchor or candidate_role == role_anchor) and (
+                not org_anchor or candidate_org == org_anchor
+            ):
+                return candidate
+        return None
+
+    def _resolve_project(
+        projects: list[Any],
+        *,
+        project_index: int,
+        name_anchor: str,
+    ) -> dict[str, Any] | None:
+        if 0 <= project_index < len(projects):
+            candidate = projects[project_index]
+            if isinstance(candidate, dict):
+                candidate_name = str(candidate.get("name") or "").strip().casefold()
+                if not name_anchor or candidate_name == name_anchor:
+                    return candidate
+
+        if not name_anchor:
+            return None
+
+        for candidate in projects:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_name = str(candidate.get("name") or "").strip().casefold()
+            if candidate_name == name_anchor:
+                return candidate
+        return None
+
     kind = edit.get("kind")
     if kind == "experience_bullet":
         experiences = resume_data.get("experience")
         if not isinstance(experiences, list):
             return False
-        experience_index = int(edit.get("experience_index", -1))
-        if experience_index < 0 or len(experiences) <= experience_index:
-            return False
-        experience = experiences[experience_index]
-        if not isinstance(experience, dict):
+        try:
+            experience_index = int(edit.get("experience_index", -1))
+        except (TypeError, ValueError):
+            experience_index = -1
+        role_anchor = str(edit.get("experience_role") or "").strip().casefold()
+        org_anchor = str(edit.get("experience_organization") or "").strip().casefold()
+        experience = _resolve_experience(
+            experiences,
+            experience_index=experience_index,
+            role_anchor=role_anchor,
+            org_anchor=org_anchor,
+        )
+        if experience is None:
             return False
         bullets = experience.get("bullets")
         if not isinstance(bullets, list):
             return False
-        item_index = int(edit.get("item_index", len(bullets)))
-        bullets.insert(min(item_index, len(bullets)), edit.get("value"))
+        try:
+            item_index = int(edit.get("item_index", len(bullets)))
+        except (TypeError, ValueError):
+            item_index = len(bullets)
+        restored_value = edit.get("value")
+        if restored_value is None:
+            return False
+        if not isinstance(restored_value, str):
+            restored_value = str(restored_value).strip()
+        if not restored_value:
+            return False
+        item_index = min(max(item_index, 0), len(bullets))
+        bullets.insert(item_index, restored_value)
         return True
 
     projects = resume_data.get("projects")
     if not isinstance(projects, list):
         return False
 
-    project_index = int(edit.get("project_index", -1))
+    try:
+        project_index = int(edit.get("project_index", -1))
+    except (TypeError, ValueError):
+        project_index = -1
+    if kind == "project_bullet":
+        project_name_anchor = str(edit.get("project_name") or "").strip().casefold()
+        project = _resolve_project(
+            projects,
+            project_index=project_index,
+            name_anchor=project_name_anchor,
+        )
+        if project is None:
+            return False
+        points = _project_points_from_entry(project)
+        try:
+            item_index = int(edit.get("item_index", len(points)))
+        except (TypeError, ValueError):
+            item_index = len(points)
+        item_index = min(max(item_index, 0), len(points))
+        restored_value = edit.get("value")
+        if restored_value is None:
+            return False
+        if not isinstance(restored_value, str):
+            restored_value = str(restored_value).strip()
+        if not restored_value:
+            return False
+        points.insert(item_index, restored_value)
+        _set_project_points_in_entry(project, points)
+        return True
+
     if kind == "project_entry":
         if project_index < 0 or project_index > len(projects):
             return False
@@ -1210,6 +1752,16 @@ def main() -> None:
         default="",
         help="Extra instructions to pass directly to the model agents",
     )
+    parser.add_argument(
+        "--template-path",
+        default="",
+        help="Optional Jinja2 template path for this run",
+    )
+    parser.add_argument(
+        "--css-path",
+        default="",
+        help="Optional custom CSS path for this run",
+    )
     args = parser.parse_args()
     requested_max_iterations = args.max_iterations
     args.max_iterations = _sanitize_max_iterations(args.max_iterations)
@@ -1231,11 +1783,15 @@ def main() -> None:
     jd_path = BASE_DIR / args.jd
     data_path = BASE_DIR / args.data
     template_css = BASE_DIR / "template" / "template.css"
+    template_path = BASE_DIR / args.template_path if args.template_path.strip() else None
 
     _banner("🤖  Resume Agent v3 — CrewAI")
 
     # ── Validate inputs ──────────────────────────────────────────────────
-    for p in [jd_path, data_path, template_css]:
+    required_paths = [jd_path, data_path, template_css]
+    if template_path is not None:
+        required_paths.append(template_path)
+    for p in required_paths:
         if not p.exists():
             _err(f"File not found: {p}")
             sys.exit(1)
@@ -1285,9 +1841,21 @@ def main() -> None:
         sys.exit(1)
 
     _info(f"Output folder: {output_dir}")
+    _init_model_trace_artifact(
+        output_dir=output_dir,
+        model=selected_model,
+        job_label=job_label,
+        profile_name=str(profile.get("personal_information", {}).get("name", "—")),
+        job_description=jd,
+    )
 
     # ── Inject shared state for tools ────────────────────────────────────
-    set_shared_state(profile=profile, output_dir=str(output_dir))
+    set_shared_state(
+        profile=profile,
+        output_dir=str(output_dir),
+        template_path=str(template_path) if template_path is not None else "",
+        css_path=args.css_path,
+    )
 
     # ── Kickoff CrewAI — staged generation loop ─────────────────────────
     _step(3, "Launching staged CrewAI resume pipeline…")
@@ -1342,8 +1910,8 @@ def main() -> None:
             agent_instructions_text = args.agent_instructions.strip() or "None"
             profile_json = json.dumps(profile, ensure_ascii=False, indent=2)
 
-            summary_result, sections_result = asyncio.run(
-                _run_summary_and_sections(
+            summary_result, projects_result, experience_result = asyncio.run(
+                _run_summary_projects_and_experience(
                     job_analysis_json=job_analysis_json,
                     truth_skills_json=_profile_skills_json(profile),
                     profile_json=profile_json,
@@ -1371,6 +1939,7 @@ def main() -> None:
                     crew_method_name="summary_skills_crew",
                     inputs={
                         "job_analysis_json": job_analysis_json,
+                        "profile_json": profile_json,
                         "truth_skills_json": _profile_skills_json(profile),
                         "mandatory_words": mandatory_words_text,
                         "agent_instructions": agent_instructions_text,
@@ -1401,13 +1970,17 @@ def main() -> None:
                     f"Summary/skills must contain exactly {TARGET_INDIVIDUAL_SKILLS} unique skills."
                 )
 
-            sections = _parse_model_json(
-                _result_to_raw_text(sections_result), ResumeSectionsDraft
+            projects_draft = _parse_model_json(
+                _result_to_raw_text(projects_result), ProjectsDraft
+            )
+            experience_draft = _parse_model_json(
+                _result_to_raw_text(experience_result), ExperienceDraft
             )
             current_json = _assemble_tailored_resume(
                 job_analysis=job_analysis,
                 summary_skills=summary_skills,
-                sections=sections,
+                projects_draft=projects_draft,
+                experience_draft=experience_draft,
                 profile_project_links=profile_project_links,
             )
         except Exception as exc:
@@ -1445,13 +2018,16 @@ def main() -> None:
                 _warn(
                     f"Draft {draft_iteration}: UNDERFLOW (Content height: {content_height}px / ~1122px). Too much empty space."
                 )
-                attempt_feedback = (
-                    "Previous attempt underfilled the page. Add richer, "
-                    "job-relevant detail across project descriptions, work "
-                    "experience bullets, and the summary while keeping one-page fit."
-                )
-                _warn("Discarding this run and restarting with enrichment feedback...")
-                continue
+                if run_attempt < MAX_RUN_ATTEMPTS:
+                    attempt_feedback = (
+                        "Previous attempt underfilled the page. Add richer, "
+                        "job-relevant detail across project descriptions, work "
+                        "experience bullets, and the summary while keeping one-page fit."
+                    )
+                    _warn("Discarding this run and restarting with enrichment feedback...")
+                    continue
+                else:
+                    _warn("Underfilled page on final attempt. Accepting as fallback to ensure resume is generated.")
             final_success = True
             _ok(
                 f"Draft {draft_iteration}: Resume fits on 1 page. Content height: {content_height}px"
@@ -1464,27 +2040,17 @@ def main() -> None:
         _info("Running local shortening pass without model/API calls.")
 
         working_data = json.loads(current_json)
-        removed_edits: list[dict[str, Any]] = []
+        removed_bullet_edits: list[dict[str, Any]] = []
         fit_found = False
+        fit_after_project_removal = False
 
-        shortening_steps: list[Any] = []
-        experiences = working_data.get("experience")
-        if isinstance(experiences, list):
-            for experience_index in range(len(experiences)):
-                shortening_steps.append(
-                    lambda data, idx=experience_index: _remove_experience_third_bullet(
-                        data,
-                        experience_index=idx,
-                    )
-                )
-        shortening_steps.append(_remove_third_project)
-
-        for step in shortening_steps:
-            edit = step(working_data)
+        # Try dynamic bullet-level shortening first
+        while True:
+            edit = _find_and_remove_next_bullet(working_data)
             if not edit:
-                _info("Local shortening step skipped; target content was not present.")
-                continue
-            removed_edits.append(edit)
+                _info("No more bullets can be safely removed (minimum 2 bullets per entry reached).")
+                break
+            removed_bullet_edits.append(edit)
             _info(str(edit["label"]))
 
             try:
@@ -1516,14 +2082,64 @@ def main() -> None:
             working_data = json.loads(candidate_json)
             if pages == 1:
                 fit_found = True
-                _ok(f"Draft {draft_iteration}: local shortening fits on 1 page.")
+                _ok(f"Draft {draft_iteration}: local bullet shortening fits on 1 page.")
                 break
             _warn(
                 f"Draft {draft_iteration}: still overflowing ({overflow_lines} rendered lines)."
             )
 
-        if fit_found:
-            for edit in reversed(removed_edits):
+        # If bullet shortening was not enough, try iterative project-level shortening
+        removed_projects_edits = []
+        if not fit_found:
+            _info("Bullet shortening insufficient. Attempting project-level shortening.")
+            while True:
+                project_edit = _remove_last_project(working_data)
+                if not project_edit:
+                    _info("Project-removal step skipped; no more projects to remove.")
+                    break
+                removed_projects_edits.append(project_edit)
+                _info(str(project_edit["label"]))
+
+                try:
+                    candidate_json = TailoredResume.model_validate(
+                        _sanitize_em_dashes(working_data)
+                    ).model_dump_json()
+                    candidate_json = _prepare_resume_json_for_render(
+                        candidate_json,
+                        args=args,
+                        jd=jd,
+                        skill_pool=skill_pool,
+                        profile_project_links=profile_project_links,
+                    )
+                    draft_iteration += 1
+                    _, pages, overflow_lines, content_height = _compile_resume_candidate(
+                        resume_json=candidate_json,
+                        iteration=draft_iteration,
+                        compile_pdf=compile_pdf,
+                        output_dir=output_dir,
+                        get_page_count=_get_page_count,
+                        get_overflow_lines=_get_overflow_lines,
+                        shared_state=_shared_state,
+                    )
+                except Exception as e:
+                    _err(f"Could not compile project-removal draft: {e}")
+                    break
+
+                current_json = candidate_json
+                working_data = json.loads(candidate_json)
+                if pages == 1:
+                    fit_found = True
+                    fit_after_project_removal = True
+                    _ok(
+                        f"Draft {draft_iteration}: fits on 1 page after removing {len(removed_projects_edits)} project(s)."
+                    )
+                    break
+                _warn(
+                    f"Draft {draft_iteration}: still overflowing ({overflow_lines} rendered lines) after project removal."
+                )
+
+        if fit_found and fit_after_project_removal:
+            for edit in reversed(removed_bullet_edits):
                 restored_data = copy.deepcopy(working_data)
                 if not _restore_local_shortening_edit(restored_data, edit):
                     continue
@@ -1555,10 +2171,11 @@ def main() -> None:
                 if pages == 1:
                     working_data = json.loads(restored_json)
                     current_json = restored_json
-                    _ok(f"Restored content and still fits: {edit['label']}")
+                    _ok(f"Restored and kept fit: {edit['label']}")
                 else:
-                    _info(f"Kept removal because restore overflowed: {edit['label']}")
+                    _info(f"Restore overflowed, keeping removal: {edit['label']}")
 
+        if fit_found:
             try:
                 draft_iteration += 1
                 _, pages, overflow_lines, content_height = _compile_resume_candidate(
@@ -1580,20 +2197,11 @@ def main() -> None:
                 overflow_limit_reached = True
                 break
 
-            if content_height > 0 and content_height < 900:
-                _warn(
-                    f"Draft {draft_iteration}: UNDERFLOW after local shortening (Content height: {content_height}px / ~1122px)."
-                )
-                attempt_feedback = (
-                    "Previous attempt underfilled after local shortening. Add richer, "
-                    "job-relevant detail while keeping one-page fit."
-                )
-                continue
             final_success = True
             break
 
         _warn(
-            "Local shortening could not fit the resume. Final output will keep only the first PDF page."
+            "Local shortening could not fit the resume. Final output will keep only the first page."
         )
         overflow_limit_reached = True
 
@@ -1604,7 +2212,10 @@ def main() -> None:
 
     # ── Post-process result ──────────────────────────────────────────────
     _step(4, "Wrapping up…")
-    pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
+    pdf_candidates = sorted(
+        output_dir.glob("draft_v*.pdf"),
+        key=lambda x: int(x.stem[7:]) if x.stem.startswith("draft_v") and x.stem[7:].isdigit() else 0
+    )
     produced_final = False
 
     # ── Find and copy final PDF ──────────────────────────────────────────

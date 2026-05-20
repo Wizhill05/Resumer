@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { SECTIONS, DEFAULT_OMISSIONS, type Omissions } from './ProfilesPage'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -31,6 +32,11 @@ interface Artifact {
   storage_path: string
   mime_type: string
   size_bytes: number | null
+}
+interface ResumeTemplate {
+  id: string
+  name: string
+  is_default: boolean
 }
 interface LogEntry {
   ts: number
@@ -68,6 +74,7 @@ const MODEL_PRESETS: Record<string, { model: string; key_env: string }> = {
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function GeneratePage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const clampIterations = useCallback((value: number) => {
     if (!Number.isFinite(value)) return 1
     return Math.max(1, Math.min(MAX_ITERATIONS, Math.trunc(value)))
@@ -94,6 +101,8 @@ export default function GeneratePage() {
   const [parsedJobs, setParsedJobs] = useState<ParsedJob[]>([])
   const [selectedParsedJobId, setSelectedParsedJobId] = useState<string>('')
   const [suggestedWords, setSuggestedWords] = useState<string[]>([])
+  const [templates, setTemplates] = useState<ResumeTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
 
   // Run state
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
@@ -136,7 +145,15 @@ export default function GeneratePage() {
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => { fetchUsers(); fetchParsedJobs() }, [])
-  useEffect(() => { if (selectedUid) { fetchProjects(); fetchPreferences() } }, [selectedUid])
+  useEffect(() => { if (selectedUid) { fetchProjects(); fetchPreferences(); fetchTemplates() } }, [selectedUid])
+  useEffect(() => {
+    const jobId = searchParams.get('job_id')
+    if (!jobId || parsedJobs.length === 0) return
+    const job = parsedJobs.find(j => j.id === jobId)
+    if (!job) return
+    loadParsedJob(job)
+    setSearchParams({}, { replace: true })
+  }, [parsedJobs, searchParams, setSearchParams])
 
   // ── Auto-scroll logic ─────────────────────────────────────────────────────
   const logContainerRef = useRef<HTMLDivElement>(null)
@@ -180,6 +197,20 @@ export default function GeneratePage() {
     } catch { /* keep defaults */ }
   }
 
+  async function fetchTemplates() {
+    if (!selectedUid) return
+    try {
+      const res = await fetch(`${API}/users/${selectedUid}/templates`)
+      const data: ResumeTemplate[] = await res.json()
+      setTemplates(data)
+      const preferred = data.find(t => t.is_default) ?? data[0]
+      setSelectedTemplateId(preferred?.id ?? '')
+    } catch {
+      setTemplates([])
+      setSelectedTemplateId('')
+    }
+  }
+
   async function fetchParsedJobs() {
     try {
       const res = await fetch(`${API}/jobs`)
@@ -220,11 +251,15 @@ export default function GeneratePage() {
       return
     }
     const job = parsedJobs.find(j => j.id === id)
-    if (job) {
-      if (job.description) setJd(job.description)
-      setJobLabel(`${job.company} - ${job.title}`)
-      setSuggestedWords(buildSuggestedWords(job))
-    }
+    if (job) loadParsedJob(job)
+  }
+
+  function loadParsedJob(job: ParsedJob) {
+    setSelectedParsedJobId(job.id)
+    if (job.description) setJd(job.description)
+    setJobLabel(`${job.company} - ${job.title}`)
+    setSuggestedWords(buildSuggestedWords(job))
+    setMandatoryWords(normalizeWordList([...(job.required_skills ?? []), ...(job.keywords ?? [])]))
   }
 
   function regenerateFromSelectedProject() {
@@ -291,6 +326,8 @@ export default function GeneratePage() {
         omissions: omissions,
         mandatory_words: mandatoryWords,
         agent_instructions: agentInstructions,
+        job_id: selectedParsedJobId,
+        template_id: selectedTemplateId,
       }),
     })
     if (!res.ok) return
@@ -377,7 +414,7 @@ export default function GeneratePage() {
               />
             </Cell>
             <Cell label="KEY ENV" noBorder>
-              <span style={{ fontSize: 10, color: 'var(--muted)', padding: '4px 0' }}>{preset.key_env}</span>
+                <span style={{ fontSize: 10, color: 'var(--muted)', padding: '4px 0' }}>{preset.key_env}</span>
             </Cell>
           </div>
           {/* Row 2 */}
@@ -396,6 +433,14 @@ export default function GeneratePage() {
                 : <button className="btn-primary" onClick={startGenerate} disabled={!jd.trim() || !selectedUid}>▶ GENERATE</button>
               }
             </div>
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--line)', padding: '8px 12px' }}>
+            <div className="bp-label" style={{ marginBottom: 4 }}>RESUME TEMPLATE</div>
+            <select value={selectedTemplateId} onChange={e => setSelectedTemplateId(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+              <option value="">System Default</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.is_default ? '[DEFAULT] ' : ''}{t.name}</option>)}
+            </select>
           </div>
 
           {/* Row 3: Section toggles */}
@@ -649,8 +694,8 @@ export default function GeneratePage() {
                   {previewArtifact.file_name}
                 </span>
                 <a
-                  href={`${API}/artifacts/download?path=${encodeURIComponent(previewArtifact.storage_path)}`}
-                  download={previewArtifact.file_name}
+                  href={`${API}/artifacts/download?path=${encodeURIComponent(previewArtifact.storage_path)}&filename=${encodeURIComponent(downloadNameForProject(selectedProject?.name ?? jobLabel, previewArtifact))}`}
+                  download={downloadNameForProject(selectedProject?.name ?? jobLabel, previewArtifact)}
                   style={{ marginLeft: 'auto', textDecoration: 'none', flexShrink: 0 }}
                 >
                   <button className="btn-ghost" style={{ height: 24, padding: '0 10px', fontSize: 10 }}>↓ DOWNLOAD</button>
@@ -658,7 +703,7 @@ export default function GeneratePage() {
               </div>
               {previewArtifact.mime_type === 'application/pdf'
                 ? <iframe
-                    src={`${API}/artifacts/download?path=${encodeURIComponent(previewArtifact.storage_path)}`}
+                    src={`${API}/artifacts/download?path=${encodeURIComponent(previewArtifact.storage_path)}&disposition=inline`}
                     style={{ flex: 1, border: 'none', background: '#fff', width: '100%' }}
                     title={previewArtifact.file_name}
                   />
@@ -670,6 +715,29 @@ export default function GeneratePage() {
       </div>
     </div>
   )
+}
+
+function sanitizeFileNamePart(value: string, fallback: string): string {
+  const cleaned = value
+    .trim()
+    .replace(/[<>:"/\\|?*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+$/g, '')
+    .trim()
+  return cleaned || fallback
+}
+
+function artifactExtension(artifact: Artifact): string {
+  const fromName = artifact.file_name.match(/(\.[a-zA-Z0-9]+)$/)?.[1]
+  if (fromName) return fromName.toLowerCase()
+  if (artifact.mime_type === 'application/pdf') return '.pdf'
+  if (artifact.mime_type === 'text/markdown') return '.md'
+  return ''
+}
+
+function downloadNameForProject(projectName: string, artifact: Artifact): string {
+  const ext = artifactExtension(artifact)
+  return `${sanitizeFileNamePart(projectName, 'resume')}${ext}`
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -726,7 +794,7 @@ function Blinker() {
 function MarkdownViewer({ path }: { path: string }) {
   const [content, setContent] = useState('')
   useEffect(() => {
-    fetch(`/api/artifacts/download?path=${encodeURIComponent(path)}`)
+    fetch(`/api/artifacts/download?path=${encodeURIComponent(path)}&disposition=inline`)
       .then(r => r.text())
       .then(setContent)
       .catch(() => setContent('Could not load file.'))

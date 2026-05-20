@@ -17,6 +17,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,7 @@ load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
 from src.gui.services.local_backend import LocalBackend  # noqa: E402
 from src.gui.services.runner import ResumeRunController  # noqa: E402
 from src.api.scrape_service import ScrapeService  # noqa: E402
+from src.api.linkedin_scrape_service import LinkedInScrapeService  # noqa: E402
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 MAX_SHORTENING_ITERATIONS = 5
@@ -47,6 +49,7 @@ _controllers_lock = threading.Lock()
 
 # Single scrape service instance
 _scrape_service = ScrapeService(backend=_backend)
+_linkedin_scrape_service = LinkedInScrapeService(backend=_backend)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Resumer API", version="1.0.0")
@@ -73,6 +76,8 @@ class SaveTruthRequest(BaseModel):
 class GenerateRequest(BaseModel):
     job_description: str
     job_label: str = ""
+    job_id: str = ""
+    template_id: str = ""
     model: str = "mistral/mistral-large-latest"
     api_key_env: str = "MISTRAL_API_KEY"
     max_iterations: int = MAX_SHORTENING_ITERATIONS
@@ -110,6 +115,28 @@ def _sanitize_max_iterations(value: int) -> int:
     return max(1, min(MAX_SHORTENING_ITERATIONS, value))
 
 
+def _serialize_dates(item: dict[str, Any]) -> dict[str, Any]:
+    serialized: dict[str, Any] = {}
+    for k, v in item.items():
+        serialized[k] = v.isoformat() if hasattr(v, "isoformat") else v
+    return serialized
+
+
+def _safe_download_filename(filename: str) -> str:
+    import re
+    cleaned = re.sub(r'[<>:"/\\|?*]+', " ", filename)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(".")
+    return cleaned or "resume"
+
+
+def _ascii_download_filename(filename: str) -> str:
+    import re
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii")
+    ascii_name = re.sub(r'[<>:"/\\|?*]+', " ", ascii_name)
+    ascii_name = re.sub(r"\s+", " ", ascii_name).strip().strip(".")
+    return ascii_name or "resume"
+
+
 # ── User endpoints ────────────────────────────────────────────────────────────
 
 
@@ -144,6 +171,13 @@ class SavePreferencesRequest(BaseModel):
     preferences: dict[str, Any]
 
 
+class SaveTemplateRequest(BaseModel):
+    name: str
+    content: str
+    css_content: str = ""
+    is_default: bool = False
+
+
 @app.get("/api/users/{uid}/preferences")
 def get_preferences(uid: str) -> dict[str, Any]:
     return _backend.get_preferences(uid)
@@ -152,6 +186,41 @@ def get_preferences(uid: str) -> dict[str, Any]:
 @app.put("/api/users/{uid}/preferences")
 def save_preferences(uid: str, body: SavePreferencesRequest) -> dict[str, str]:
     _backend.save_preferences(uid, body.preferences)
+    return {"status": "ok"}
+
+
+@app.get("/api/users/{uid}/templates")
+def list_templates(uid: str) -> list[dict[str, Any]]:
+    return [_serialize_dates(t) for t in _backend.list_resume_templates(uid)]
+
+
+@app.post("/api/users/{uid}/templates", status_code=201)
+def create_template(uid: str, body: SaveTemplateRequest) -> dict[str, Any]:
+    if not body.name.strip():
+        raise HTTPException(400, "Template name is required")
+    template = _backend.create_resume_template(
+        uid, body.name, body.content, css_content=body.css_content, is_default=body.is_default
+    )
+    return _serialize_dates(template)
+
+
+@app.put("/api/users/{uid}/templates/{template_id}")
+def update_template(uid: str, template_id: str, body: SaveTemplateRequest) -> dict[str, str]:
+    _backend.update_resume_template(uid, template_id, body.name, body.content, body.css_content)
+    if body.is_default:
+        _backend.set_default_resume_template(uid, template_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/users/{uid}/templates/{template_id}", status_code=204)
+def delete_template(uid: str, template_id: str) -> Response:
+    _backend.delete_resume_template(uid, template_id)
+    return Response(status_code=204)
+
+
+@app.put("/api/users/{uid}/templates/{template_id}/default")
+def set_default_template(uid: str, template_id: str) -> dict[str, str]:
+    _backend.set_default_resume_template(uid, template_id)
     return {"status": "ok"}
 
 
@@ -199,7 +268,7 @@ def list_artifacts(uid: str, project_id: str) -> list[dict[str, Any]]:
 
 
 @app.get("/api/artifacts/download")
-def download_artifact(path: str) -> Response:
+def download_artifact(path: str, filename: str = "", disposition: str = "attachment") -> Response:
     """Serve a stored artifact file by its absolute storage_path."""
     artifact_path = Path(path)
     if not artifact_path.exists() or not artifact_path.is_file():
@@ -214,7 +283,13 @@ def download_artifact(path: str) -> Response:
         mime = "application/json"
     else:
         mime = "application/octet-stream"
-    content_disposition = f'inline; filename="{artifact_path.name}"'
+    download_name = _safe_download_filename(filename.strip() or artifact_path.name)
+    ascii_name = _ascii_download_filename(download_name)
+    encoded_name = quote(download_name, safe="")
+    disposition_type = "inline" if disposition == "inline" else "attachment"
+    content_disposition = (
+        f'{disposition_type}; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+    )
 
     data = artifact_path.read_bytes()
     return Response(
@@ -258,10 +333,27 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
     data_path = run_dir / "truth.runtime.json"
     data_path.write_text(json.dumps(truth_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    template_path = ""
+    css_path = ""
+    template_id = body.template_id.strip()
+    template = _backend.get_resume_template(uid, template_id) if template_id else None
+    if template:
+        if str(template.get("content", "")).strip():
+            template_file = run_dir / "resume_template.runtime.jinja2"
+            template_file.write_text(str(template["content"]), encoding="utf-8")
+            template_path = str(template_file.relative_to(_PROJECT_ROOT))
+        if str(template.get("css_content", "")).strip():
+            css_file = run_dir / "resume_template.runtime.css"
+            css_file.write_text(str(template["css_content"]), encoding="utf-8")
+            css_path = str(css_file.relative_to(_PROJECT_ROOT))
+
     # Build and start the controller
     controller = ResumeRunController(workspace_root=_PROJECT_ROOT)
     _set_controller(project_id, controller)
     max_iterations = _sanitize_max_iterations(body.max_iterations)
+
+    log_file = run_dir / "terminal_logs.md"
+    log_file.write_text("```text\n", encoding="utf-8")
 
     controller.start_run(
         jd_path=str(jd_path.relative_to(_PROJECT_ROOT)),
@@ -273,8 +365,11 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
         omissions=body.omissions,
         mandatory_words=body.mandatory_words,
         agent_instructions=body.agent_instructions,
+        template_path=template_path,
+        css_path=css_path,
         project_id=project_id,
         project_name=job_label or sanitized_label,
+        raw_log_path=str(log_file),
     )
 
     # Background poller: polls controller until done, then syncs artifacts to DB
@@ -283,6 +378,7 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
         uid=uid,
         project_id=project_id,
         controller=controller,
+        job_id=body.job_id.strip(),
     )
 
     return {"project_id": project_id, "status": "started"}
@@ -464,10 +560,79 @@ def stop_scrape() -> dict[str, str]:
     _scrape_service.stop()
     return {"status": "stopping"}
 
+
+class LinkedInScrapeRequest(BaseModel):
+    keywords: str = "Software Engineer"
+    location: str = "India"
+    geo_id: str = "102713980"
+    distance: str = "25"
+    experience_levels: str = "1"
+    work_types: str = "2,1"
+    job_types: str = ""
+    posted_within: str = ""
+    salary_tag: str = ""
+    sort_by: str = "R"
+    easy_apply: bool = False
+    target_count: int = 50
+    direct_url: str = ""
+
+
+@app.post("/api/linkedin-scrape/start", status_code=202)
+def start_linkedin_scrape(body: LinkedInScrapeRequest) -> dict[str, str]:
+    if _linkedin_scrape_service.is_running:
+        raise HTTPException(409, "A LinkedIn scrape run is already in progress")
+    _linkedin_scrape_service.start(
+        keywords=body.keywords,
+        location=body.location,
+        geo_id=body.geo_id,
+        distance=body.distance,
+        experience_levels=body.experience_levels,
+        work_types=body.work_types,
+        job_types=body.job_types,
+        posted_within=body.posted_within,
+        salary_tag=body.salary_tag,
+        sort_by=body.sort_by,
+        easy_apply=body.easy_apply,
+        target_count=body.target_count,
+        direct_url=body.direct_url,
+    )
+    return {"status": "started"}
+
+
+@app.get("/api/linkedin-scrape/status")
+def get_linkedin_scrape_status() -> dict[str, Any]:
+    s = _linkedin_scrape_service.status
+    entries = _linkedin_scrape_service.logs[-500:]
+    return {
+        "state": s.state,
+        "phase": s.phase,
+        "progress": s.progress,
+        "total_jobs": s.total_jobs,
+        "enriched_jobs": s.enriched_jobs,
+        "error": s.error,
+        "logs": [
+            {"ts": e.ts, "text": e.text, "level": e.level}
+            for e in entries
+        ],
+    }
+
+
+@app.post("/api/linkedin-scrape/stop", status_code=200)
+def stop_linkedin_scrape() -> dict[str, str]:
+    if not _linkedin_scrape_service.is_running:
+        raise HTTPException(404, "No active LinkedIn scrape run")
+    _linkedin_scrape_service.stop()
+    return {"status": "stopping"}
+
 # ── Internal poller ───────────────────────────────────────────────────────────
 
 
-def _poll_until_done(uid: str, project_id: str, controller: ResumeRunController) -> None:
+def _poll_until_done(
+    uid: str,
+    project_id: str,
+    controller: ResumeRunController,
+    job_id: str = "",
+) -> None:
     """Runs in a background thread. Polls the controller until the run finishes,
     then syncs artifacts into the DB and cleans up the controller."""
     import shutil
@@ -481,31 +646,81 @@ def _poll_until_done(uid: str, project_id: str, controller: ResumeRunController)
         if state in {"completed", "failed", "stopped"}:
             break
 
+    raw_log_path = getattr(controller, "_raw_log_path", "")
+    if raw_log_path:
+        try:
+            with open(raw_log_path, "a", encoding="utf-8") as f:
+                f.write("\n```\n")
+        except Exception:
+            pass
+
     # Sync artifacts from output_dir into the DB
     output_dir_str = controller.status.output_dir.strip()
     output_dir = Path(output_dir_str) if output_dir_str and output_dir_str != "-" else None
 
     try:
+        final_exists = False
         if output_dir and output_dir.exists():
+            final_exists = _has_final_resume(output_dir)
             analysis_path = output_dir / "job_analysis.json"
-            if analysis_path.exists() and analysis_path.is_file():
+            if state == "completed" and analysis_path.exists() and analysis_path.is_file():
                 analysis_data = json.loads(analysis_path.read_text(encoding="utf-8"))
                 if isinstance(analysis_data, dict):
                     _backend.update_job_analysis_by_project_id(
                         project_id=project_id,
                         analysis=analysis_data,
                     )
+            if state != "completed" or not final_exists:
+                error_msg = (
+                    f"Run ended with state='{state}' (exit_code={controller.status.exit_code})"
+                    if state != "completed"
+                    else "Run completed without final_resume.pdf or final_resume.md"
+                )
+                _write_error_markdown(
+                    output_dir=output_dir,
+                    project_id=project_id,
+                    job_id=job_id,
+                    error_message=error_msg,
+                    logs=controller.logs[-80:],
+                )
             _backend.replace_project_artifacts_from_local(
                 uid=uid,
                 project_id=project_id,
                 output_dir=output_dir,
             )
+            if state == "completed" and job_id and final_exists:
+                _backend.link_job_to_project(job_id=job_id, project_id=project_id)
+                _backend.update_job_analysis_by_job_id_from_project(
+                    job_id=job_id,
+                    project_id=project_id,
+                )
+            elif job_id:
+                artifact_error_path = (
+                    _PROJECT_ROOT / "data" / "artifacts" / uid / project_id / "error.md"
+                )
+                error_message = (
+                    f"Run ended with state='{state}' (exit_code={controller.status.exit_code})"
+                    if state != "completed"
+                    else "Run completed without final_resume.pdf or final_resume.md"
+                )
+                _backend.mark_job_resume_error(
+                    job_id=job_id,
+                    project_id=project_id,
+                    error_path=str(artifact_error_path.resolve()),
+                    error_message=error_message,
+                )
             shutil.rmtree(output_dir, ignore_errors=True)
 
         final_status = "completed" if state == "completed" else "failed"
+        if state == "completed" and (not output_dir or not final_exists):
+            final_status = "failed"
         error_msg = (
-            "" if state == "completed"
-            else f"Run ended with state='{state}' (exit_code={controller.status.exit_code})"
+            "" if final_status == "completed"
+            else (
+                f"Run ended with state='{state}' (exit_code={controller.status.exit_code})"
+                if state != "completed"
+                else "Run completed without final_resume.pdf or final_resume.md"
+            )
         )
         _backend.update_project_status(
             uid=uid,
@@ -525,3 +740,38 @@ def _poll_until_done(uid: str, project_id: str, controller: ResumeRunController)
             pass
     finally:
         _remove_controller(project_id)
+
+
+def _has_final_resume(output_dir: Path) -> bool:
+    return any(
+        (output_dir / name).is_file()
+        for name in ("final_resume.pdf", "final_resume.md")
+    )
+
+
+def _write_error_markdown(
+    *,
+    output_dir: Path,
+    project_id: str,
+    job_id: str,
+    error_message: str,
+    logs: list[Any],
+) -> Path:
+    lines = [
+        "# Resume Generation Error",
+        "",
+        f"- Project ID: `{project_id}`",
+        f"- Job ID: `{job_id or '-'}`",
+        f"- Error: {error_message}",
+        "",
+        "## Recent Logs",
+        "",
+        "```text",
+    ]
+    for entry in logs:
+        text = getattr(entry, "text", str(entry))
+        lines.append(text)
+    lines.extend(["```", ""])
+    path = output_dir / "error.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path

@@ -6,12 +6,9 @@ from the job_seen_beacon elements and saves it to a JSON file.
 """
 
 import json
-import os
 from pathlib import Path
 from scrapling.parser import Selector
 from dotenv import load_dotenv
-from pydantic import BaseModel
-from litellm import completion
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 INPUT_HTML = OUTPUT_DIR / "indeed_raw.html"
@@ -19,31 +16,6 @@ OUTPUT_JSON = OUTPUT_DIR / "parsed_jobs.json"
 
 # Load environment variables
 load_dotenv(Path(__file__).parents[2] / ".env.local")
-if os.getenv("GEMINI_KEY"):
-    os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_KEY")
-
-class SalaryExtraction(BaseModel):
-    min_salary_inr_per_year: float | None
-    max_salary_inr_per_year: float | None
-
-def normalize_salary(pay_str: str) -> dict:
-    """Use Gemini via LiteLLM to normalize a salary string into min/max INR per year."""
-    if not os.environ.get("GEMINI_API_KEY"):
-        return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
-        
-    try:
-        response = completion(
-            model='gemini/gemini-2.5-flash',
-            messages=[
-                {'role': 'system', 'content': 'You are a helpful assistant that converts salary strings into normalized INR per year. If given a range, extract min and max. If given a single number, set both min and max to that number. Assume standard working hours for hourly rates. 1 month = 12 months/year.'},
-                {'role': 'user', 'content': f'Extract normalized salary in INR per year from: {pay_str}'}
-            ],
-            response_format=SalaryExtraction
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        print(f"[!] NLP extraction failed for '{pay_str}': {e}")
-        return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
 
 def extract_text(element):
     """Recursively extract and join all text from an element and its descendants."""
@@ -108,14 +80,6 @@ def main():
             raw_pay = pay_info[0]
             job['pay'] = raw_pay
             metadata.remove(raw_pay)
-            
-            # Normalize pay using NLP
-            safe_pay_print = raw_pay.encode('ascii', 'ignore').decode('ascii')
-            print(f"      [NLP] Normalizing salary: {safe_pay_print}")
-            normalized = normalize_salary(raw_pay)
-            if normalized:
-                job['min_salary_inr'] = normalized.get('min_salary_inr_per_year')
-                job['max_salary_inr'] = normalized.get('max_salary_inr_per_year')
             
         job['metadata'] = metadata
         

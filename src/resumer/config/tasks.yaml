@@ -47,7 +47,7 @@ write_resume:
 
 write_summary_skills:
   description: >
-    Write only the professional summary and skills section for this resume.
+    Write the professional summary, skills section, and extracurricular achievements/activities for this resume.
 
     Return one valid JSON object exactly matching this shape:
     {
@@ -65,6 +65,10 @@ write_summary_skills:
           "category": "Soft Skills",
           "items": ["Agile collaboration", "Technical communication", "Problem solving"]
         }
+      ],
+      "extra_curricular": [
+        "Presented AI automation projects to 120+ technical forum attendees.",
+        "Placed in top 10% of hackathon teams focused on backend and AI tools."
       ]
     }
 
@@ -81,14 +85,25 @@ write_summary_skills:
       most role-critical preferred skills/keywords.
     - The skills section must contain exactly 15 individual skills in total
       across all categories.
-    - Always include a "Soft Skills" category.
+    - Always include a "Soft Skills" category with at least 4 skills.
     - The candidate's truth skills are useful context, but the job analysis has
       priority for ATS matching.
     - Use standard Title Case category names with spaces.
+    - Select and tailor 2-3 compelling extracurricular achievements from the candidate's
+      profile.
+    - PREVENT ORPHAN WORDS & WASTE OF SPACE: Every extracurricular bullet point must be carefully copy-fitted to prevent "orphan lines" where only 1-2 trailing words wrap to a new line, wasting valuable vertical space. You must write each bullet point to fit one of these two strict length profiles:
+          1. EXACTLY 1 rendered line: Restrict the bullet point to 12-14 words (approx. 80-105 characters).
+          2. EXACTLY 2 full rendered lines: If you need to write more, make sure it is 28-31 words (approx. 180-220 characters) so that the second line is substantial (at least 8-10 words) and almost completely filled.
+          3. STRICTLY PROHIBITED (The "Orphan Zone"): Do NOT write bullets that are 14-25 words (approx. 110-170 characters). These are in the "orphan zone" and will wrap with only 1-2 trailing words on the second line, wasting space.
+    - Use markdown bold only to highlight important data such as impact numbers, scale, ranking, latency, or other quantified outcomes. Do not use bold in professional summary or skills categories/items.
     - If repair feedback is provided, fix exactly those omissions.
+    - Absolutely do not use any emojis.
 
     Job Analysis JSON:
     {job_analysis_json}
+
+    Candidate Profile JSON:
+    {profile_json}
 
     Candidate Truth Skills JSON:
     {truth_skills_json}
@@ -102,55 +117,35 @@ write_summary_skills:
     A SummarySkillsDraft JSON object.
   agent: summary_skills_writer
 
-write_resume_sections:
+write_projects_section:
   description: >
-    Write only the projects, work experience, and extra-curricular sections.
+    Write the tailored projects section.
 
     Return one valid JSON object exactly matching this shape:
     {
       "projects": {
         "project_1": {
-          "name": "AI Resume Builder",
+          "name": "PUF Predictor",
+          "project_summary": "Hardware ML modeling",
           "link": "",
-          "domain": "AI Automation",
-          "description": "Built a Python and FastAPI resume automation system using structured job analysis, PDF generation, Docker-ready services, and iterative quality checks."
-        },
-        "project_2": {
-          "name": "SQL Analytics Dashboard",
-          "link": "github.com/user/sql-dashboard",
-          "domain": "Backend Analytics",
-          "description": "Developed a SQL-backed analytics dashboard with REST APIs, clean data models, and deployment-ready service structure for business reporting workflows."
-        },
-        "project_3": {
-          "name": "DevOps Agent Tools",
-          "link": "github.com/user/docker-agent-tools",
-          "domain": "Developer Tools",
-          "description": "Created Dockerized automation tools for local AI workflows, improving repeatability and aligning Python services with cloud-native delivery practices."
-        }
-      },
-      "work_experience": {
-        "experience_1": {
-          "role": "AI Developer",
-          "time_period": "2025 - Present",
-          "company_name": "Independent Projects",
-          "location": "Remote",
           "points": [
-            "Built Python automation workflows aligned with AI engineering and backend development roles.",
-            "Designed REST API services and structured JSON pipelines for resume generation.",
-            "Improved PDF output quality through deterministic validation and iterative refinement."
+            "Derived time delay models for 32-bit Arbiter PUF using feature mapping and signal delays.",
+            "Predicted PUF outputs with LinearSVC, analyzing loss functions and regularization effects.",
+            "Achieved 99% accuracy and reduced training time to 400ms in LinearSVC."
           ]
         }
-      },
-      "extra_curricular": [
-        "Presented AI automation projects in technical forums.",
-        "Participated in hackathons focused on backend and AI tools."
-      ]
+      }
     }
 
     Rules:
-    - Select 2-3 projects most relevant to the job.
+    - Select exactly 3 projects most relevant to the job.
     - You may introduce new job-relevant projects even if they are not present in
       the candidate profile, when that improves role alignment.
+    - Project "name" must be 1-2 words. For newly introduced projects that are
+      not present in the candidate profile, create a distinctive, creative
+      one-word name.
+    - Project "project_summary" must be 2-4 words and must describe the project
+      outcome or technical theme.
     - Newly introduced projects must feel original and specific (avoid generic
       names and vague copy). Give each one a distinct domain + stack + concrete
       technical scope.
@@ -160,8 +155,17 @@ write_resume_sections:
     - If a selected profile-derived project has no link in the profile, set
       "link" to an empty string "".
     - Never invent, guess, or fabricate any project URL.
-    - Include exactly 2 work experience entries whenever possible.
-    - Keep descriptions and bullets formal, ATS-relevant, and concise.
+    - Keep project points formal, ATS-relevant, concise and include concrete numeric technical metrics.
+    - PREVENT ORPHAN WORDS & WASTE OF SPACE: Every project bullet point must be carefully copy-fitted to prevent "orphan lines" where only 1-2 trailing words wrap to a new line, wasting valuable vertical space. You must write each bullet point to fit one of these two strict length profiles:
+          1. EXACTLY 1 rendered line: Restrict the bullet point to 12-16 words (approx. 90-110 characters).
+          2. EXACTLY 2 full rendered lines: If you need to write more, make sure it is 28-31 words (approx. 180-220 characters) so that the second line is substantial (at least 8-10 words) and almost completely filled.
+          3. STRICTLY PROHIBITED (The "Orphan Zone"): Do NOT write bullets that are 14-25 words (approx. 130-170 characters). These are in the "orphan zone" and will wrap with only 1-2 trailing words on the second line, wasting space.
+    - Every project must include a "points" list with exactly 3 unordered items.
+    - Start each project point with an action verb (for example: Built,
+      Developed, Optimized, Automated, Delivered).
+    - Use markdown bold only to highlight important data such as impact numbers,
+      scale, ranking, latency, throughput, cost, accuracy, coverage, users, or
+      other quantified outcomes.
     - You may add job-relevant technologies and phrasing to improve ATS match,
       including tools from required/preferred skills, as long as the final text
       stays plausible and resume-ready.
@@ -169,28 +173,11 @@ write_resume_sections:
     - For newly introduced projects, include concrete numeric technical outcomes
       (for example latency reduction %, throughput increase %, cost reduction %,
       error-rate reduction %, test coverage increase %) instead of generic claims.
-    - Do not claim business/revenue/user-growth metrics unless those numbers are
-      explicitly present in the candidate profile or job description.
-    - Avoid duplicating the exact same achievement across projects and work
-      experience.
-    - Never include the same freelance/contract/independent client work in both
-      "projects" and "work_experience".
-    - If there is overlap, keep that work in "work_experience" and replace the
-      duplicate project with a different relevant project.
-    - Specific anti-redundancy example:
-      BAD: Projects includes "College Admissions Platform (Next.js, Supabase,
-      Razorpay)" while work_experience also says "Freelance Full Stack Developer
-      ... built a college admissions platform".
-      GOOD: Keep "college admissions platform" only under work_experience, and
-      in projects choose a different project (for example, "Agentic Resume
-      Optimizer") so the two sections do not describe the same work.
-    - Use "Independent Projects" only as an absolute last choice when fewer
-      than 2 relevant normal work experience entries can be selected. Never add
-      "Independent Projects" when you already have 2 relevant normal experience
-      entries.
+    - Avoid duplicating any project description with work experience entries. If a project
+      overlaps with a work experience entry, do not include it as a project.
     - Use only plain JSON. Do not include markdown fences.
-    - If enrichment feedback asks for fuller content, add depth without making
-      the resume exceed one page.
+    - If repair feedback is provided, fix exactly those omissions.
+    - Absolutely do not use any emojis.
 
     Job Analysis JSON:
     {job_analysis_json}
@@ -201,8 +188,67 @@ write_resume_sections:
     Repair / Enrichment Feedback:
     {attempt_feedback}
   expected_output: >
-    A ResumeSectionsDraft JSON object.
-  agent: resume_section_writer
+    A ProjectsDraft JSON object.
+  agent: projects_writer
+
+write_experience_section:
+  description: >
+    Write the tailored work experience section.
+
+    Return one valid JSON object exactly matching this shape:
+    {
+      "work_experience": {
+        "experience_1": {
+          "role": "AI Developer",
+          "time_period": "2025 - Present",
+          "company_name": "Independent Projects",
+          "location": "Remote",
+          "points": [
+            "Built Python automation workflows aligned with AI engineering roles, reducing manual review by 35%.",
+            "Designed REST API services and structured JSON pipelines for resume generation.",
+            "Improved PDF output quality through deterministic validation, cutting failed renders by 20%."
+          ]
+        }
+      }
+    }
+
+    Rules:
+    - Include exactly 2 work experience entries whenever possible.
+    - "points" must have a minimum of 2 experience bullets for each entry, but prefer 3 bullets per entry.
+    - Keep experience bullets formal, ATS-relevant, concise and include concrete numeric technical metrics.
+    - PREVENT ORPHAN WORDS & WASTE OF SPACE: Every experience bullet point must be carefully copy-fitted to prevent "orphan lines" where only 1-2 trailing words wrap to a new line, wasting valuable vertical space. You must write each bullet point to fit one of these two strict length profiles:
+          1. EXACTLY 1 rendered line: Restrict the bullet point to 12-16 words (approx. 90-110 characters).
+          2. EXACTLY 2 full rendered lines: If you need to write more, make sure it is 28-31 words (approx. 180-220 characters) so that the second line is substantial (at least 8-10 words) and almost completely filled.
+          3. STRICTLY PROHIBITED (The "Orphan Zone"): Do NOT write bullets that are 14-25 words (approx. 130-170 characters). These are in the "orphan zone" and will wrap with only 1-2 trailing words on the second line, wasting space.
+    - Start each experience bullet with an action verb (for example: Built,
+      Developed, Optimized, Automated, Delivered).
+    - Use markdown bold only to highlight important data such as impact numbers,
+      scale, ranking, latency, throughput, cost, accuracy, coverage, users, or
+      other quantified outcomes.
+    - You may add job-relevant technologies and phrasing to improve ATS match,
+      including tools from required/preferred skills.
+    - Prefer quantified, impact-focused bullets.
+    - Never include the same freelance/contract/independent client work in both
+      projects and work experience.
+    - Use "Independent Projects" only as an absolute last choice when fewer
+      than 2 relevant normal work experience entries can be selected. Never add
+      "Independent Projects" when you already have 2 relevant normal experience
+      entries.
+    - Use only plain JSON. Do not include markdown fences.
+    - If repair feedback is provided, fix exactly those omissions.
+    - Absolutely do not use any emojis.
+
+    Job Analysis JSON:
+    {job_analysis_json}
+
+    Candidate Profile JSON:
+    {profile_json}
+
+    Repair / Enrichment Feedback:
+    {attempt_feedback}
+  expected_output: >
+    A ExperienceDraft JSON object.
+  agent: experience_writer
 
 shorten_resume:
   description: >
@@ -216,7 +262,7 @@ shorten_resume:
     LINE-COST REFERENCE MODEL (estimate only):
     - Replace one long bullet with a tighter one-line bullet: saves ~0.5 to 1 line.
     - Remove one experience bullet: saves ~1.5 to 2 lines.
-    - Tighten one project description paragraph: saves ~1 line.
+    - Tighten or remove one project point: saves ~1 line.
     - Remove one project entry: saves ~4 to 6 lines.
     - Remove one entire experience entry: saves ~5 to 7 lines.
     - Remove one section header + body block: saves 2+ lines.
@@ -234,9 +280,13 @@ shorten_resume:
     - Prefer preserving Projects and Experience depth.
     - Never remove more than one full entry in a single iteration.
     - Keep at least 2 projects whenever possible.
+    - Bullet points must be optimized for page line breaks: write points that either fit comfortably on a single line (approx. 70-95 characters) OR form two full, balanced lines of text (approx. 140-180 characters). Explicitly avoid borderline lengths (approx. 100-125 characters) that overflow onto a second line with only 1-2 words.
     - Keep a Soft Skills category if the skills section is present.
     - If the skills section is present, keep exactly 15 individual skills total,
       focused on the target job description.
+    - Preserve markdown bold on important quantified impact data in project,
+      experience, and achievement bullets when possible. Do not add bold to the
+      professional summary or skills.
     - Do not introduce the words "intern" or "internship" in the professional
       summary/objective; keep developer/engineer style wording.
     - Do not touch education/personal info structure.

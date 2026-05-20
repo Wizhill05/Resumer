@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 
 const API = "/api";
 
@@ -9,8 +10,6 @@ interface ScrapedJob {
   location: string;
   link: string;
   pay: string;
-  min_salary: number | null;
-  max_salary: number | null;
   posted_date: string;
   description: string;
   technical_skills: string[];
@@ -27,8 +26,12 @@ interface ScrapedJob {
   status: string;
   scrape_session: string;
   project_id: string;
+  resume_error_project_id: string;
+  resume_error_path: string;
+  resume_error_message: string;
   applied: boolean;
   created_at: string;
+  scrape_source: string;
 }
 
 interface Artifact {
@@ -80,6 +83,7 @@ function formatSeniorityLabel(seniorityLevel: string): string {
 }
 
 export default function JobLibraryPage() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<ScrapedJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedUid, setSelectedUid] = useState<string>("");
@@ -95,7 +99,7 @@ export default function JobLibraryPage() {
   const [hasDescFilter, setHasDescFilter] = useState(false);
   const [hasSkillsFilter, setHasSkillsFilter] = useState(false);
   const [hasSalaryFilter, setHasSalaryFilter] = useState(false);
-  const [sortBy, setSortBy] = useState<"date" | "company" | "title" | "salary">(
+  const [sortBy, setSortBy] = useState<"date" | "company" | "title">(
     "date",
   );
 
@@ -201,6 +205,30 @@ export default function JobLibraryPage() {
     }
   }
 
+  function remakeResume(job: ScrapedJob) {
+    navigate(`/generate?job_id=${encodeURIComponent(job.id)}&remake=1`);
+  }
+
+  async function downloadArtifact(artifact: Artifact, filename: string) {
+    const url = `${API}/artifacts/download?path=${encodeURIComponent(
+      artifact.storage_path,
+    )}&filename=${encodeURIComponent(filename)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      alert(`Download failed (${res.status}). The artifact may be missing.`);
+      return;
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+
   // Unique companies for filter dropdown
   const companies = useMemo(
     () => [...new Set(jobs.map((j) => j.company).filter(Boolean))].sort(),
@@ -215,7 +243,7 @@ export default function JobLibraryPage() {
       if (appliedFilter === "applied" && !job.applied) return false;
       if (appliedFilter === "not_applied" && job.applied) return false;
       if (companyFilter && job.company !== companyFilter) return false;
-      if (hasSalaryFilter && !job.pay && !job.min_salary) return false;
+      if (hasSalaryFilter && !job.pay) return false;
       if (hasDescFilter && !job.description) return false;
       if (hasSkillsFilter && !job.technical_skills?.length) return false;
       if (searchQuery) {
@@ -250,7 +278,6 @@ export default function JobLibraryPage() {
         return (a.company || "").localeCompare(b.company || "");
       if (sortBy === "title")
         return (a.title || "").localeCompare(b.title || "");
-      if (sortBy === "salary") return (b.max_salary || 0) - (a.max_salary || 0);
       return (b.created_at || "").localeCompare(a.created_at || "");
     });
 
@@ -439,7 +466,6 @@ export default function JobLibraryPage() {
                 <option value="date">Newest</option>
                 <option value="company">Company</option>
                 <option value="title">Title</option>
-                <option value="salary">Salary</option>
               </select>
             </div>
 
@@ -589,6 +615,20 @@ export default function JobLibraryPage() {
                         ✓ RESUME
                       </span>
                     )}
+                    {!job.project_id && job.resume_error_path && (
+                      <span
+                        style={{
+                          fontSize: 8,
+                          padding: "1px 5px",
+                          background: "rgba(224,82,99,0.10)",
+                          color: "var(--red)",
+                          border: "1px solid var(--red)",
+                          fontWeight: 700,
+                        }}
+                      >
+                        FAILED
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div
@@ -640,6 +680,17 @@ export default function JobLibraryPage() {
                     }}
                   >
                     {job.status.toUpperCase()}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 8,
+                      padding: "1px 5px",
+                      color: job.scrape_source === 'linkedin' ? '#0a66c2' : 'var(--muted)',
+                      border: `1px solid ${job.scrape_source === 'linkedin' ? '#0a66c2' : 'var(--line)'}`,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {job.scrape_source === 'linkedin' ? 'LI' : 'IN'}
                   </span>
                 </div>
               </div>
@@ -734,7 +785,7 @@ export default function JobLibraryPage() {
                         fontSize: 11,
                       }}
                     >
-                      OPEN IN INDEED ↗
+                      OPEN IN {selectedJob.scrape_source === 'linkedin' ? 'LINKEDIN' : 'INDEED'} ↗
                     </button>
                   </a>
                   <button
@@ -782,18 +833,6 @@ export default function JobLibraryPage() {
                       ? new Date(selectedJob.created_at).toLocaleDateString(
                           "en-GB",
                         )
-                      : "—",
-                  ],
-                  [
-                    "Min Salary",
-                    selectedJob.min_salary != null
-                      ? `₹${selectedJob.min_salary.toLocaleString()}`
-                      : "—",
-                  ],
-                  [
-                    "Max Salary",
-                    selectedJob.max_salary != null
-                      ? `₹${selectedJob.max_salary.toLocaleString()}`
                       : "—",
                   ],
                   ["Pay (Raw)", selectedJob.pay || "—"],
@@ -1079,26 +1118,30 @@ export default function JobLibraryPage() {
                   <span className="bp-label">GENERATED RESUME</span>
                   {selectedJob.project_id && (
                     <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        className="btn-ghost"
+                        style={{ height: 26, padding: "0 10px", fontSize: 10 }}
+                        onClick={() => remakeResume(selectedJob)}
+                      >
+                        REMAKE RESUME
+                      </button>
                       {bestArtifact && (
-                        <a
-                          href={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}`}
-                          download={getJobDownloadFileName(
-                            selectedJob,
-                            bestArtifact,
-                          )}
-                          style={{ textDecoration: "none" }}
+                        <button
+                          className="btn-ghost"
+                          style={{
+                            height: 26,
+                            padding: "0 10px",
+                            fontSize: 10,
+                          }}
+                          onClick={() =>
+                            downloadArtifact(
+                              bestArtifact,
+                              getJobDownloadFileName(selectedJob, bestArtifact),
+                            )
+                          }
                         >
-                          <button
-                            className="btn-ghost"
-                            style={{
-                              height: 26,
-                              padding: "0 10px",
-                              fontSize: 10,
-                            }}
-                          >
-                            ↓ DOWNLOAD PDF
-                          </button>
-                        </a>
+                          ↓ DOWNLOAD PDF
+                        </button>
                       )}
                       <button
                         className="btn-ghost"
@@ -1115,11 +1158,45 @@ export default function JobLibraryPage() {
                       </button>
                     </div>
                   )}
+                  {!selectedJob.project_id && (
+                    <button
+                      className="btn-ghost"
+                      style={{ height: 26, padding: "0 10px", fontSize: 10 }}
+                      onClick={() => remakeResume(selectedJob)}
+                    >
+                      MAKE RESUME
+                    </button>
+                  )}
                 </div>
                 {!selectedJob.project_id && (
                   <div style={{ color: "var(--muted)", fontSize: 11 }}>
-                    No resume generated. Use Batch Processing or the Generate
-                    page.
+                    {selectedJob.resume_error_path
+                      ? selectedJob.resume_error_message || "Resume generation failed."
+                      : "No resume generated. Use Batch Processing or the Generate page."}
+                    {selectedJob.resume_error_path && (
+                      <div style={{ marginTop: 10 }}>
+                        <button
+                          className="btn-ghost"
+                          style={{ height: 26, padding: "0 10px", fontSize: 10 }}
+                          onClick={() => {
+                            const artifact = {
+                              id: 0,
+                              file_name: "error.md",
+                              artifact_type: "error_md",
+                              storage_path: selectedJob.resume_error_path,
+                              mime_type: "text/markdown",
+                              size_bytes: null,
+                            };
+                            downloadArtifact(
+                              artifact,
+                              getJobDownloadFileName(selectedJob, artifact),
+                            );
+                          }}
+                        >
+                          DOWNLOAD ERROR
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
                 {selectedJob.project_id && artifactsLoading && (
@@ -1151,15 +1228,7 @@ export default function JobLibraryPage() {
                             (x) => x.id.toString() === e.target.value,
                           );
                           if (a) {
-                            const link = document.createElement("a");
-                            link.href = `${API}/artifacts/download?path=${encodeURIComponent(
-                              a.storage_path,
-                            )}`;
-                            link.download = getJobDownloadFileName(
-                              selectedJob,
-                              a,
-                            );
-                            link.click();
+                            downloadArtifact(a, getJobDownloadFileName(selectedJob, a));
                             e.target.value = "";
                           }
                         }}
@@ -1205,7 +1274,7 @@ export default function JobLibraryPage() {
                             PREVIEW
                           </div>
                           <iframe
-                            src={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}`}
+                            src={`${API}/artifacts/download?path=${encodeURIComponent(bestArtifact.storage_path)}&disposition=inline`}
                             style={{
                               width: "100%",
                               height: "500px",

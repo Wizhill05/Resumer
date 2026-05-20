@@ -223,7 +223,7 @@ def _build_html(md_path: Path, css_path: Path) -> str:
             font-size: 10pt;
             line-height: 1.5;
             margin: 0;
-            padding: 0.8cm 1cm;
+            padding: 1.0cm 1.4cm;
             color: black;
             background: white;
         }
@@ -373,6 +373,104 @@ def generate_pdf(
             pass
 
         page.wait_for_timeout(200)
+
+        # Apply Dynamic DOM Micro-Squeezing Typesetting Optimizer
+        try:
+            page.evaluate(
+                """() => {
+                    const elements = document.querySelectorAll('.resume-body li, .resume-body p');
+                    for (const el of elements) {
+                        if (!el.textContent.trim()) continue;
+
+                        const originalHTML = el.innerHTML;
+
+                        function wrapWords(node) {
+                            if (node.nodeType === Node.TEXT_NODE) {
+                                const text = node.textContent;
+                                const words = text.split(/(\s+)/);
+                                const fragment = document.createDocumentFragment();
+                                for (const word of words) {
+                                    if (word.trim().length > 0) {
+                                        const span = document.createElement('span');
+                                        span.className = 'word-span';
+                                        span.textContent = word;
+                                        fragment.appendChild(span);
+                                    } else {
+                                        fragment.appendChild(document.createTextNode(word));
+                                    }
+                                }
+                                node.parentNode.replaceChild(fragment, node);
+                            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                                if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') return;
+                                const children = Array.from(node.childNodes);
+                                for (const child of children) {
+                                    wrapWords(child);
+                                }
+                            }
+                        }
+
+                        wrapWords(el);
+
+                        const spans = Array.from(el.querySelectorAll('.word-span'));
+                        if (spans.length === 0) {
+                            el.innerHTML = originalHTML;
+                            continue;
+                        }
+
+                        const lines = [];
+                        let currentLineTop = -99999;
+                        let currentLine = [];
+                        for (const span of spans) {
+                            const top = span.getBoundingClientRect().top;
+                            if (Math.abs(top - currentLineTop) > 3) {
+                                if (currentLine.length > 0) {
+                                    lines.push(currentLine);
+                                }
+                                currentLine = [span];
+                                currentLineTop = top;
+                            } else {
+                                currentLine.push(span);
+                            }
+                        }
+                        if (currentLine.length > 0) {
+                            lines.push(currentLine);
+                        }
+
+                        el.innerHTML = originalHTML;
+
+                        const totalLines = lines.length;
+                        if (totalLines <= 1) continue;
+
+                        const lastLineWords = lines[totalLines - 1];
+                        const lastLineWordCount = lastLineWords.length;
+                        const lastLineText = lastLineWords.map(s => s.textContent).join(' ').trim();
+                        const lastLineCharCount = lastLineText.length;
+
+                        // Detect orphan word on the last line (widow)
+                        const isWidow = (lastLineWordCount <= 2) || (lastLineWordCount <= 3 && lastLineCharCount <= 18);
+
+                        if (isWidow) {
+                            const originalHeight = el.offsetHeight;
+                            let success = false;
+
+                            // Try squeezing up to -0.04em
+                            for (let ls = -0.005; ls >= -0.04; ls -= 0.005) {
+                                el.style.letterSpacing = `${ls}em`;
+                                if (el.offsetHeight < originalHeight) {
+                                    success = true;
+                                    break;
+                                }
+                            }
+
+                            if (!success) {
+                                el.style.letterSpacing = 'normal';
+                            }
+                        }
+                    }
+                }"""
+            )
+        except Exception as err:
+            print(f"⚠️  Spacing optimizer script failed: {err}")
 
         # Measure the content height before generating the PDF
         content_height = page.evaluate("() => document.body.scrollHeight")

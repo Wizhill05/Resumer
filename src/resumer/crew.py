@@ -53,15 +53,22 @@ def resolve_llm_runtime() -> tuple[str, str, str | None]:
     return model, key_env, api_key
 
 
-_resolved_model, _resolved_key_env, _resolved_api_key = resolve_llm_runtime()
+_nim_llm: LLM | None = None
 
-nim_llm = LLM(
-    model=_resolved_model,
-    api_key=_resolved_api_key,
-    temperature=0.7,
-    max_tokens=40000,
-    top_p=0.9,
-)
+
+def get_llm() -> LLM:
+    """Lazy loader for the LLM to prevent early initialization during static module imports."""
+    global _nim_llm
+    if _nim_llm is None:
+        model, key_env, api_key = resolve_llm_runtime()
+        _nim_llm = LLM(
+            model=model,
+            api_key=api_key,
+            temperature=0.7,
+            max_tokens=40000,
+            top_p=0.9,
+        )
+    return _nim_llm
 
 
 @CrewBase
@@ -79,7 +86,7 @@ class ResumerCrew:
     def job_analyzer(self) -> Agent:
         return Agent(
             config=self.agents_config["job_analyzer"],  # type: ignore[index]
-            llm=nim_llm,
+            llm=get_llm(),
             verbose=False,
         )
 
@@ -87,15 +94,23 @@ class ResumerCrew:
     def summary_skills_writer(self) -> Agent:
         return Agent(
             config=self.agents_config["summary_skills_writer"],  # type: ignore[index]
-            llm=nim_llm,
+            llm=get_llm(),
             verbose=False,
         )
 
     @agent
-    def resume_section_writer(self) -> Agent:
+    def projects_writer(self) -> Agent:
         return Agent(
-            config=self.agents_config["resume_section_writer"],  # type: ignore[index]
-            llm=nim_llm,
+            config=self.agents_config["projects_writer"],  # type: ignore[index]
+            llm=get_llm(),
+            verbose=False,
+        )
+
+    @agent
+    def experience_writer(self) -> Agent:
+        return Agent(
+            config=self.agents_config["experience_writer"],  # type: ignore[index]
+            llm=get_llm(),
             verbose=False,
         )
 
@@ -103,7 +118,7 @@ class ResumerCrew:
     def resume_writer(self) -> Agent:
         return Agent(
             config=self.agents_config["resume_writer"],  # type: ignore[index]
-            llm=nim_llm,
+            llm=get_llm(),
             verbose=False,
         )
 
@@ -111,7 +126,7 @@ class ResumerCrew:
     def resume_shortener(self) -> Agent:
         return Agent(
             config=self.agents_config["resume_shortener"],  # type: ignore[index]
-            llm=nim_llm,
+            llm=get_llm(),
             verbose=False,
         )
 
@@ -132,9 +147,15 @@ class ResumerCrew:
         )
 
     @task
-    def write_resume_sections(self) -> Task:
+    def write_projects_section(self) -> Task:
         return Task(
-            config=self.tasks_config["write_resume_sections"],  # type: ignore[index]
+            config=self.tasks_config["write_projects_section"],  # type: ignore[index]
+        )
+
+    @task
+    def write_experience_section(self) -> Task:
+        return Task(
+            config=self.tasks_config["write_experience_section"],  # type: ignore[index]
         )
 
     @task
@@ -174,10 +195,20 @@ class ResumerCrew:
         )
 
     @crew
-    def resume_sections_crew(self) -> Crew:
-        write = self.write_resume_sections()
+    def projects_crew(self) -> Crew:
+        write = self.write_projects_section()
         return Crew(
-            agents=[self.resume_section_writer()],
+            agents=[self.projects_writer()],
+            tasks=[write],
+            process=Process.sequential,
+            verbose=False,
+        )
+
+    @crew
+    def experience_crew(self) -> Crew:
+        write = self.write_experience_section()
+        return Crew(
+            agents=[self.experience_writer()],
             tasks=[write],
             process=Process.sequential,
             verbose=False,

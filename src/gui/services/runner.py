@@ -89,6 +89,7 @@ class ResumeRunController:
         self._suppress_prompt_block = False
         self._suppress_profile_block = False
         self._suppress_final_answer_block = False
+        self._raw_log_path = ""
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -105,14 +106,18 @@ class ResumeRunController:
         omissions: dict[str, bool],
         mandatory_words: list[str] | None = None,
         agent_instructions: str = "",
+        template_path: str = "",
+        css_path: str = "",
         project_id: str = "",
         project_name: str = "",
+        raw_log_path: str = "",
     ) -> None:
         if self.is_running():
             raise RuntimeError("A run is already in progress")
 
         _ensure_windows_subprocess_event_loop_support()
 
+        self._raw_log_path = raw_log_path
         self.logs = []
         self.status = PipelineStatus(
             state="starting",
@@ -161,6 +166,12 @@ class ResumeRunController:
         if agent_instructions.strip():
             cmd.append("--agent-instructions")
             cmd.append(agent_instructions)
+        if template_path.strip():
+            cmd.append("--template-path")
+            cmd.append(template_path)
+        if css_path.strip():
+            cmd.append("--css-path")
+            cmd.append(css_path)
 
         env = os.environ.copy()
         env["RESUMER_MODEL"] = model
@@ -209,6 +220,19 @@ class ResumeRunController:
 
         if self._process is not None and self._process.poll() is not None:
             if self.status.state not in {"completed", "failed", "stopped"}:
+                # Join reader threads to make sure all final pipe output is ingested
+                for t in self._threads:
+                    if t.is_alive():
+                        t.join(timeout=1.0)
+
+                # Perform a final queue drain
+                while True:
+                    try:
+                        stream, line = self._log_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._consume_line(stream, line)
+
                 code = self._process.returncode
                 self.status.exit_code = code
                 self.status.run_finished_at = time.time()
@@ -261,6 +285,13 @@ class ResumeRunController:
                 pass
 
     def _consume_line(self, stream: str, raw_line: str) -> None:
+        if getattr(self, "_raw_log_path", ""):
+            try:
+                with open(self._raw_log_path, "a", encoding="utf-8") as f:
+                    f.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+            except Exception:
+                pass
+
         clean_line = self._normalize_log_line(_strip_ansi(raw_line))
         if not clean_line:
             return
@@ -462,9 +493,12 @@ class ResumeRunController:
         elif "summary and skills agent:" in lower:
             self.status.active_agent = "summary_skills_writer"
             self.status.active_task = "write_summary_skills"
-        elif "projects and experience agent:" in lower:
-            self.status.active_agent = "resume_section_writer"
-            self.status.active_task = "write_resume_sections"
+        elif "projects agent:" in lower:
+            self.status.active_agent = "projects_writer"
+            self.status.active_task = "write_projects_section"
+        elif "experience agent:" in lower:
+            self.status.active_agent = "experience_writer"
+            self.status.active_task = "write_experience_section"
         elif "shortening agent:" in lower:
             self.status.active_agent = "resume_shortener"
             self.status.active_task = "shorten_resume"

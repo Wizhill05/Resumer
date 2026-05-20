@@ -3,13 +3,12 @@ crawl_indeed.py
 ===============
 A multi-page crawler for Indeed jobs that fetches search pages
 using Scrapling's StealthyFetcher, parses the HTML in memory,
-extracts job details, normalizes salaries using Mistral API, and
-filters technical skills using Mistral API.
+extracts job details and filters technical skills using Mistral API.
 
 Workflow (three sequential phases):
   Phase 1 — Scrape basic info for ALL jobs across all pages.
   Phase 2 — Deep-fetch every job's individual page (description + attributes).
-  Phase 3 — Run NLP (salary normalisation + skill filter) on all jobs.
+  Phase 3 — Run NLP skill filtering on all jobs.
 
 Configuration:
 - TARGET_JOBS_COUNT: Adjust this to change how many jobs to scrape.
@@ -57,40 +56,6 @@ if os.getenv("MISTRAL_API_KEY"):
 # ---------------------------------------------------------------------------
 # NLP Setup
 # ---------------------------------------------------------------------------
-
-
-class SalaryExtraction(BaseModel):
-    min_salary_inr_per_year: float | None
-    max_salary_inr_per_year: float | None
-
-
-def normalize_salary(pay_str: str) -> dict:
-    """Use Mistral via LiteLLM to normalize a salary string into min/max INR per year.
-    Kept as an API call because currency parsing (handling $, €, ₹, £, lpa, etc.)
-    requires language understanding beyond simple regex.
-    """
-    if not os.environ.get("MISTRAL_API_KEY"):
-        return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
-
-    try:
-        response = completion(
-            model="mistral/ministral-3b-2512",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that converts salary strings into normalized INR per year. If given a range, extract min and max. If given a single number, set both min and max to that number. Assume standard working hours for hourly rates. 1 month = 12 months/year. Convert foreign currencies to INR at current approximate exchange rates.",
-                },
-                {
-                    "role": "user",
-                    "content": f"Extract normalized salary in INR per year from: {pay_str}",
-                },
-            ],
-            response_format=SalaryExtraction,
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        print(f"[!] Salary NLP failed for '{pay_str}': {e}", file=sys.stderr)
-        return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
 
 
 # ---------------------------------------------------------------------------
@@ -335,26 +300,15 @@ def fetch_deep_job_details(session, job_id: str, max_retries: int = 3) -> dict |
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 — NLP: salary normalisation + skill filter
+# Phase 3 — NLP skill filter
 # ---------------------------------------------------------------------------
 
 
 def run_nlp_on_job(job: dict) -> dict:
     """Enrich a single job dict with NLP-derived fields.
 
-    - Normalises 'pay' → 'min_salary_inr' / 'max_salary_inr'
     - Filters 'raw_attributes' → 'technical_skills' via Mistral
     """
-    # Salary normalisation
-    if job.get("pay"):
-        raw_pay = job["pay"]
-        safe_pay_print = raw_pay.encode("ascii", "ignore").decode("ascii")
-        print(f"      [NLP] Normalizing salary: {safe_pay_print}")
-        normalized = normalize_salary(raw_pay)
-        if normalized:
-            job["min_salary_inr"] = normalized.get("min_salary_inr_per_year")
-            job["max_salary_inr"] = normalized.get("max_salary_inr_per_year")
-
     # Skill extraction
     raw_attrs = job.pop("raw_attributes", None)
     if raw_attrs:
@@ -531,7 +485,7 @@ def main():
         )
 
     # -----------------------------------------------------------------------
-    # PHASE 3: NLP — salary normalisation + GLiNER skill filtering
+    # PHASE 3: NLP — technical skill filtering
     # (session not needed — all network work is done)
     # -----------------------------------------------------------------------
     print(f"\n{'=' * 60}")

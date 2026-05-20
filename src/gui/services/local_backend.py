@@ -15,6 +15,8 @@ DATA_DIR = WORKSPACE_ROOT / "data"
 DB_PATH = DATA_DIR / "resumer.db"
 ARTIFACTS_ROOT = DATA_DIR / "artifacts"
 SAMPLE_TRUTH_PATH = WORKSPACE_ROOT / "input" / "sampletruth.json"
+DEFAULT_TEMPLATE_PATH = WORKSPACE_ROOT / "template" / "base_resume.jinja2"
+DEFAULT_TEMPLATE_CSS_PATH = WORKSPACE_ROOT / "template" / "template.css"
 
 
 @dataclass(slots=True)
@@ -79,6 +81,17 @@ class LocalBackend:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS resume_templates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                css_content TEXT NOT NULL DEFAULT '',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_projects_user_created
                 ON projects(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_artifacts_project_created
@@ -93,8 +106,6 @@ class LocalBackend:
                 location       TEXT NOT NULL DEFAULT '',
                 link           TEXT NOT NULL DEFAULT '',
                 pay            TEXT NOT NULL DEFAULT '',
-                min_salary     REAL,
-                max_salary     REAL,
                 posted_date    TEXT NOT NULL DEFAULT '',
                 metadata       TEXT NOT NULL DEFAULT '[]',
                 snippet        TEXT NOT NULL DEFAULT '[]',
@@ -110,7 +121,11 @@ class LocalBackend:
                 analysis_seniority_level TEXT NOT NULL DEFAULT '',
                 scrape_session TEXT NOT NULL DEFAULT '',
                 status         TEXT NOT NULL DEFAULT 'basic',
+                scrape_source  TEXT NOT NULL DEFAULT 'indeed',
                 project_id     TEXT DEFAULT '',
+                resume_error_project_id TEXT DEFAULT '',
+                resume_error_path TEXT DEFAULT '',
+                resume_error_message TEXT DEFAULT '',
                 applied        INTEGER DEFAULT 0,
                 created_at     TEXT NOT NULL
             );
@@ -121,6 +136,15 @@ class LocalBackend:
         try:
             self.conn.execute(
                 "ALTER TABLE profiles ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Live migration: add css_content if the DB was created before this column existed.
+        try:
+            self.conn.execute(
+                "ALTER TABLE resume_templates ADD COLUMN css_content TEXT NOT NULL DEFAULT ''"
             )
             self.conn.commit()
         except Exception:
@@ -155,6 +179,37 @@ class LocalBackend:
         try:
             self.conn.execute(
                 "ALTER TABLE scraped_jobs ADD COLUMN applied INTEGER DEFAULT 0"
+            )
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        for stmt in (
+            "ALTER TABLE scraped_jobs ADD COLUMN resume_error_project_id TEXT DEFAULT ''",
+            "ALTER TABLE scraped_jobs ADD COLUMN resume_error_path TEXT DEFAULT ''",
+            "ALTER TABLE scraped_jobs ADD COLUMN resume_error_message TEXT DEFAULT ''",
+        ):
+            try:
+                self.conn.execute(stmt)
+                self.conn.commit()
+            except Exception:
+                pass
+
+        # Live migration: salary range fields were removed in favor of raw pay text.
+        for stmt in (
+            "ALTER TABLE scraped_jobs DROP COLUMN min_salary",
+            "ALTER TABLE scraped_jobs DROP COLUMN max_salary",
+        ):
+            try:
+                self.conn.execute(stmt)
+                self.conn.commit()
+            except Exception:
+                pass
+
+        # Live migration: add scrape_source to distinguish Indeed vs LinkedIn jobs.
+        try:
+            self.conn.execute(
+                "ALTER TABLE scraped_jobs ADD COLUMN scrape_source TEXT NOT NULL DEFAULT 'indeed'"
             )
             self.conn.commit()
         except Exception:
@@ -268,6 +323,153 @@ class LocalBackend:
             (uid, payload, now, now),
         )
         self.conn.commit()
+
+    def list_resume_templates(self, uid: str) -> list[dict[str, Any]]:
+        self._ensure_default_template(uid)
+        rows = self.conn.execute(
+            """
+            SELECT id, user_id, name, content, css_content, is_default, created_at, updated_at
+            FROM resume_templates
+            WHERE user_id = ?
+            ORDER BY is_default DESC, updated_at DESC
+            """,
+            (uid,),
+        ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "user_id": str(row["user_id"]),
+                "name": str(row["name"]),
+                "content": str(row["content"]),
+                "css_content": str(row["css_content"]),
+                "is_default": bool(row["is_default"]),
+                "created_at": _safe_dt(row["created_at"]),
+                "updated_at": _safe_dt(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def create_resume_template(
+        self, uid: str, name: str, content: str, *, css_content: str = "", is_default: bool = False
+    ) -> dict[str, Any]:
+        template_id = str(uuid4())
+        now = _now_iso()
+        if is_default:
+            self.conn.execute(
+                "UPDATE resume_templates SET is_default = 0 WHERE user_id = ?",
+                (uid,),
+            )
+        self.conn.execute(
+            """
+            INSERT INTO resume_templates (id, user_id, name, content, css_content, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (template_id, uid, name.strip() or "Untitled Template", content, css_content, 1 if is_default else 0, now, now),
+        )
+        self.conn.commit()
+        return self.get_resume_template(uid, template_id) or {}
+
+    def get_resume_template(self, uid: str, template_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT id, user_id, name, content, css_content, is_default, created_at, updated_at
+            FROM resume_templates
+            WHERE user_id = ? AND id = ?
+            LIMIT 1
+            """,
+            (uid, template_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "user_id": str(row["user_id"]),
+            "name": str(row["name"]),
+            "content": str(row["content"]),
+            "css_content": str(row["css_content"]),
+            "is_default": bool(row["is_default"]),
+            "created_at": _safe_dt(row["created_at"]),
+            "updated_at": _safe_dt(row["updated_at"]),
+        }
+
+    def get_default_resume_template(self, uid: str) -> dict[str, Any] | None:
+        self._ensure_default_template(uid)
+        row = self.conn.execute(
+            """
+            SELECT id
+            FROM resume_templates
+            WHERE user_id = ? AND is_default = 1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self.get_resume_template(uid, str(row["id"]))
+
+    def update_resume_template(
+        self, uid: str, template_id: str, name: str, content: str, css_content: str = ""
+    ) -> None:
+        now = _now_iso()
+        self.conn.execute(
+            """
+            UPDATE resume_templates
+            SET name = ?, content = ?, css_content = ?, updated_at = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (name.strip() or "Untitled Template", content, css_content, now, uid, template_id),
+        )
+        self.conn.commit()
+
+    def delete_resume_template(self, uid: str, template_id: str) -> None:
+        row = self.conn.execute(
+            "SELECT is_default FROM resume_templates WHERE user_id = ? AND id = ?",
+            (uid, template_id),
+        ).fetchone()
+        self.conn.execute(
+            "DELETE FROM resume_templates WHERE user_id = ? AND id = ?",
+            (uid, template_id),
+        )
+        self.conn.commit()
+        if row is not None and bool(row["is_default"]):
+            remaining = self.list_resume_templates(uid)
+            if remaining:
+                self.set_default_resume_template(uid, remaining[0]["id"])
+
+    def set_default_resume_template(self, uid: str, template_id: str) -> None:
+        now = _now_iso()
+        self.conn.execute(
+            "UPDATE resume_templates SET is_default = 0 WHERE user_id = ?",
+            (uid,),
+        )
+        self.conn.execute(
+            """
+            UPDATE resume_templates
+            SET is_default = 1, updated_at = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (now, uid, template_id),
+        )
+        self.conn.commit()
+
+    def _ensure_default_template(self, uid: str) -> None:
+        existing = self.conn.execute(
+            "SELECT COUNT(*) FROM resume_templates WHERE user_id = ?",
+            (uid,),
+        ).fetchone()[0]
+        if existing:
+            return
+
+        content = DEFAULT_TEMPLATE_PATH.read_text(encoding="utf-8")
+        css_content = DEFAULT_TEMPLATE_CSS_PATH.read_text(encoding="utf-8")
+        self.create_resume_template(
+            uid,
+            "Readable Tabulated Resume",
+            content,
+            css_content=css_content,
+            is_default=True,
+        )
 
     def create_project(self, *, uid: str, name: str, job_description: str) -> str:
         project_id = str(uuid4())
@@ -469,23 +671,22 @@ class LocalBackend:
             """
             INSERT INTO scraped_jobs (
                 id, title, company, location, link, pay,
-                min_salary, max_salary, posted_date,
-                metadata, snippet, description,
+                posted_date, metadata, snippet, description,
                 technical_skills, raw_attributes,
                 analysis_applying_for, analysis_required_skills,
                 analysis_preferred_skills, analysis_key_responsibilities,
                 analysis_keywords, analysis_experience_years,
                 analysis_seniority_level,
-                scrape_session, status, project_id, applied, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                scrape_session, status, scrape_source, project_id,
+                resume_error_project_id, resume_error_path, resume_error_message,
+                applied, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 company = excluded.company,
                 location = excluded.location,
                 link = excluded.link,
                 pay = excluded.pay,
-                min_salary = excluded.min_salary,
-                max_salary = excluded.max_salary,
                 posted_date = excluded.posted_date,
                 metadata = excluded.metadata,
                 snippet = excluded.snippet,
@@ -501,7 +702,11 @@ class LocalBackend:
                 analysis_seniority_level = excluded.analysis_seniority_level,
                 scrape_session = excluded.scrape_session,
                 status = excluded.status,
-                project_id = excluded.project_id,
+                scrape_source = excluded.scrape_source,
+                project_id = COALESCE(NULLIF(scraped_jobs.project_id, ''), excluded.project_id),
+                resume_error_project_id = scraped_jobs.resume_error_project_id,
+                resume_error_path = scraped_jobs.resume_error_path,
+                resume_error_message = scraped_jobs.resume_error_message,
                 applied = excluded.applied
             """,
             (
@@ -511,8 +716,6 @@ class LocalBackend:
                 job.get("location", ""),
                 job.get("link", ""),
                 job.get("pay", ""),
-                job.get("min_salary_inr") or job.get("min_salary"),
-                job.get("max_salary_inr") or job.get("max_salary"),
                 job.get("posted_date", ""),
                 json.dumps(job.get("metadata", []), ensure_ascii=False),
                 json.dumps(job.get("snippet", []), ensure_ascii=False),
@@ -528,7 +731,11 @@ class LocalBackend:
                 str(job.get("seniority_level", "")),
                 job.get("scrape_session", ""),
                 job.get("status", "basic"),
+                job.get("scrape_source", "indeed"),
                 job.get("project_id", ""),
+                job.get("resume_error_project_id", ""),
+                job.get("resume_error_path", ""),
+                job.get("resume_error_message", ""),
                 job.get("applied", 0),
                 now,
             ),
@@ -542,17 +749,20 @@ class LocalBackend:
 
     def list_scraped_jobs(self) -> list[dict[str, Any]]:
         """Return all scraped jobs."""
+        self.reconcile_job_resume_links()
         rows = self.conn.execute(
             """
             SELECT id, title, company, location, link, pay,
-                   min_salary, max_salary, posted_date,
+                   posted_date,
                    metadata, snippet, description,
                    technical_skills, raw_attributes,
                    analysis_applying_for, analysis_required_skills,
                    analysis_preferred_skills, analysis_key_responsibilities,
                    analysis_keywords, analysis_experience_years,
                    analysis_seniority_level,
-                   scrape_session, status, project_id, applied, created_at
+                   scrape_session, status, scrape_source, project_id,
+                   resume_error_project_id, resume_error_path, resume_error_message,
+                   applied, created_at
             FROM scraped_jobs
             ORDER BY created_at DESC
             """
@@ -566,8 +776,6 @@ class LocalBackend:
                 "location": str(row["location"]),
                 "link": str(row["link"]),
                 "pay": str(row["pay"]),
-                "min_salary": row["min_salary"],
-                "max_salary": row["max_salary"],
                 "posted_date": str(row["posted_date"]),
                 "metadata": json.loads(row["metadata"] or "[]"),
                 "snippet": json.loads(row["snippet"] or "[]"),
@@ -587,11 +795,49 @@ class LocalBackend:
                 "seniority_level": str(row["analysis_seniority_level"] or ""),
                 "scrape_session": str(row["scrape_session"]),
                 "status": str(row["status"]),
+                "scrape_source": str(row["scrape_source"] or "indeed"),
                 "project_id": str(row["project_id"] or ""),
+                "resume_error_project_id": str(row["resume_error_project_id"] or ""),
+                "resume_error_path": str(row["resume_error_path"] or ""),
+                "resume_error_message": str(row["resume_error_message"] or ""),
                 "applied": bool(row["applied"]),
                 "created_at": _safe_dt(row["created_at"]),
             })
         return result
+
+    def reconcile_job_resume_links(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT sj.id, sj.project_id, pa.storage_path
+            FROM scraped_jobs sj
+            LEFT JOIN project_artifacts pa ON sj.project_id = pa.project_id AND pa.artifact_type IN ('final_pdf', 'final_md')
+            WHERE COALESCE(sj.project_id, '') != ''
+            """
+        ).fetchall()
+
+        job_validity = {}
+        for row in rows:
+            job_id = str(row["id"])
+            storage_path = row["storage_path"]
+            
+            if job_id not in job_validity:
+                job_validity[job_id] = False
+            
+            if storage_path and Path(str(storage_path)).is_file():
+                job_validity[job_id] = True
+
+        to_unlink = [job_id for job_id, is_valid in job_validity.items() if not is_valid]
+
+        if to_unlink:
+            chunk_size = 999
+            for i in range(0, len(to_unlink), chunk_size):
+                chunk = to_unlink[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                self.conn.execute(
+                    f"UPDATE scraped_jobs SET project_id = '' WHERE id IN ({placeholders})",
+                    chunk,
+                )
+            self.conn.commit()
 
     def update_job_analysis_by_project_id(
         self, *, project_id: str, analysis: dict[str, Any]
@@ -693,8 +939,36 @@ class LocalBackend:
     def link_job_to_project(self, job_id: str, project_id: str) -> None:
         """Update the project_id for a scraped job."""
         self.conn.execute(
-            "UPDATE scraped_jobs SET project_id = ? WHERE id = ?",
+            """
+            UPDATE scraped_jobs
+            SET project_id = ?,
+                resume_error_project_id = '',
+                resume_error_path = '',
+                resume_error_message = ''
+            WHERE id = ?
+            """,
             (project_id, job_id),
+        )
+        self.conn.commit()
+
+    def mark_job_resume_error(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        error_path: str,
+        error_message: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE scraped_jobs
+            SET project_id = '',
+                resume_error_project_id = ?,
+                resume_error_path = ?,
+                resume_error_message = ?
+            WHERE id = ?
+            """,
+            (project_id, error_path, error_message, job_id),
         )
         self.conn.commit()
 
@@ -731,6 +1005,18 @@ class LocalBackend:
                 "artifact_type": "job_analysis_json",
                 "iteration": None,
                 "mime_type": "application/json",
+            }
+        if lower_name == "error.md":
+            return {
+                "artifact_type": "error_md",
+                "iteration": None,
+                "mime_type": "text/markdown",
+            }
+        if lower_name == "model_conversations.md":
+            return {
+                "artifact_type": "model_conversations_md",
+                "iteration": None,
+                "mime_type": "text/markdown",
             }
         ext = Path(file_name).suffix.lower()
         return {
@@ -771,12 +1057,14 @@ def _artifact_sort_key(item: dict[str, Any]) -> tuple[int, int, datetime]:
         rank = 5
     elif artifact_type == "final_md":
         rank = 4
-    elif artifact_type == "draft_pdf":
+    elif artifact_type == "model_conversations_md":
         rank = 3
-    elif artifact_type == "draft_md":
+    elif artifact_type == "draft_pdf":
         rank = 2
-    else:
+    elif artifact_type == "draft_md":
         rank = 1
+    else:
+        rank = 0
     iteration = item.get("iteration")
     if not isinstance(iteration, int):
         iteration = -1

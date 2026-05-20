@@ -11,3 +11,4 @@ job_organizer/
 chrome_profile/
 package-lock.json
 pnpm-lock.yaml
+last_session.md

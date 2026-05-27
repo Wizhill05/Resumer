@@ -29,7 +29,7 @@ The scraping architecture in `scrape_service.py` executes in three distinct phas
 - **Phase 2 (Deep Fetch)**: Iterates over the gathered jobs and directly requests the `viewjob` page to get the full description. 
   - *Direct URL Bypass*: If a user provides a single job link, the pipeline skips Phase 1, creates a mock job entry, and extracts all metadata (title, company, etc.) directly from the `viewjob` page during Phase 2.
   - *Persistence*: Jobs are only persisted to SQLite (`upsert_scraped_job`) *after* successfully completing Phase 2 to avoid cluttering the DB with 404s.
-- **Phase 3 (NLP Enrichment)**: Passes raw text attributes to Mistral to extract `technical_skills` and parse salary into `min_salary_inr` and `max_salary_inr`. Errors are caught gracefully, leaving the job in the DB without skills rather than failing.
+- **Phase 3 (NLP Enrichment)**: Passes raw text attributes to Mistral to extract `technical_skills`, and optionally infer raw `pay` text when present. Errors are caught gracefully, leaving the job in the DB without skills rather than failing.
 
 ## 4. Local Database Schema
 

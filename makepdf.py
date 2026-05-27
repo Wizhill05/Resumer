@@ -223,9 +223,10 @@ def _build_html(md_path: Path, css_path: Path) -> str:
             font-size: 10pt;
             line-height: 1.5;
             margin: 0;
-            padding: 0.8cm 1cm;
+            padding: 1.0cm 1.4cm;
             color: black;
             background: white;
+            text-align: justify;
         }
 
         a { color: #1A0DAB; text-decoration: none; }
@@ -245,12 +246,13 @@ def _build_html(md_path: Path, css_path: Path) -> str:
         h3 { font-size: 1em; font-weight: bold; margin: 0.5em 0 0.2em; }
 
         ul { padding-left: 1.4em; margin: 0.2em 0; list-style-type: circle; }
-        li { margin-bottom: 0.15em; }
+        li { margin-bottom: 0.28em; text-align: justify; color: #4a4a4a; }
 
         dl { display: flex; margin: 0; }
         dl dt, dl dd:not(:last-child) { flex: 1; }
+        ul + dl, ol + dl, dl + dl { margin-top: 0.7em; }
 
-        p { margin: 0.2em 0; }
+        p { margin: 0.2em 0; text-align: justify; }
     """)
 
     # 6. Assemble full HTML document
@@ -289,7 +291,7 @@ def generate_pdf(
     md_path: str | Path = "template/template.md",
     css_path: str | Path = "template/template.css",
     output_path: str | Path = "output/resume.pdf",
-) -> tuple[Path, int]:
+) -> tuple[Path, int, list[dict]]:
     """
     Generate a PDF resume from a Markdown template and a CSS stylesheet.
 
@@ -304,7 +306,8 @@ def generate_pdf(
 
     Returns
     -------
-    Tuple of (Path to the generated PDF file, content height in pixels).
+    Tuple of (Path to the generated PDF file, content height in pixels,
+    list of orphan/oversize bullet dicts detected after auto-fit).
     """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright  # lazy import
@@ -317,7 +320,11 @@ def generate_pdf(
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        # Set viewport to exactly match A4 width minus PDF margins (764px) at 96 DPI
+        page = browser.new_page(
+            viewport={"width": 764, "height": 1123},
+        )
+        page.emulate_media(media="print")
 
         # Use DOM readiness instead of networkidle. The template references
         # external font/icon CDNs, and waiting for full network idle can hang.
@@ -374,7 +381,205 @@ def generate_pdf(
 
         page.wait_for_timeout(200)
 
-        # Measure the content height before generating the PDF
+        # Auto-fit: binary search for optimal font-size and line-height
+        # Inspired by https://github.com/vladartym/always-fit-resume
+        # Pass 1: find the largest font-size (8pt-12pt) at tight line-height
+        # Pass 2: expand line-height (1.15x-1.8x) to fill remaining space
+        try:
+            fit_result = page.evaluate(
+                """() => {
+                    const body = document.body;
+                    const FS_MIN = 8;
+                    const FS_MAX = 12;
+                    const LH_MIN = 1.15;
+                    const LH_MAX = 1.8;
+
+                    // A4 at current print margins: 297mm - 0.2cm top - 0.2cm bottom = 293.6mm
+                    // Body padding adds ~1cm each side from the base CSS.
+                    // Playwright renders at 96dpi: 1mm = 3.7795px
+                    // Available content height ~ 293.6mm * 3.7795 ≈ 1109px
+                    // Use scrollHeight vs a single-page limit with a safe buffer to prevent overflows.
+                    const PAGE_HEIGHT = 1100;
+
+                    function measure() {
+                        return body.scrollHeight;
+                    }
+
+                    function applyStyle(fontSize, lineHeight) {
+                        body.style.fontSize = fontSize + 'pt';
+                        body.style.lineHeight = String(lineHeight);
+                    }
+
+                    // Pass 1: binary search for max font-size at tightest line-height
+                    let lo = FS_MIN;
+                    let hi = FS_MAX;
+                    applyStyle(hi, LH_MIN);
+                    if (measure() <= PAGE_HEIGHT) {
+                        // Already fits at max font size — skip search
+                        lo = hi;
+                    } else {
+                        for (let i = 0; i < 30; i++) {
+                            const mid = (lo + hi) / 2;
+                            applyStyle(mid, LH_MIN);
+                            if (measure() <= PAGE_HEIGHT) {
+                                lo = mid;
+                            } else {
+                                hi = mid;
+                            }
+                            if (hi - lo < 0.01) break;
+                        }
+                    }
+                    const fontSize = Math.floor(lo * 100) / 100;
+
+                    // Pass 2: binary search for max line-height at locked font-size
+                    let lhLo = LH_MIN;
+                    let lhHi = LH_MAX;
+                    applyStyle(fontSize, lhHi);
+                    if (measure() <= PAGE_HEIGHT) {
+                        lhLo = lhHi;
+                    } else {
+                        for (let i = 0; i < 30; i++) {
+                            const mid = (lhLo + lhHi) / 2;
+                            applyStyle(fontSize, mid);
+                            if (measure() <= PAGE_HEIGHT) {
+                                lhLo = mid;
+                            } else {
+                                lhHi = mid;
+                            }
+                            if (lhHi - lhLo < 0.001) break;
+                        }
+                    }
+                    const lineHeight = Math.floor(lhLo * 1000) / 1000;
+
+                    // Apply final values
+                    applyStyle(fontSize, lineHeight);
+
+                    return { fontSize, lineHeight, contentHeight: measure() };
+                }"""
+            )
+            print(
+                f"  Auto-fit: font-size={fit_result['fontSize']:.2f}pt, "
+                f"line-height={fit_result['lineHeight']:.3f}, "
+                f"content-height={fit_result['contentHeight']}px"
+            )
+        except Exception as err:
+            print(f"⚠️  Auto-fit script failed: {err}")
+
+        # ── Pass 3: Orphan line detection ─────────────────────────────────
+        # After auto-fit locks font-size and line-height, measure every <li>
+        # to find orphan lines (wrapping to a mostly-empty second line) and
+        # oversize bullets (exceeding 2 rendered lines).
+        orphan_data: list[dict] = []
+        try:
+            orphan_result = page.evaluate(
+                """() => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    const results = [];
+
+                    const allLi = document.querySelectorAll('li');
+                    for (const li of allLi) {
+                        const text = li.textContent.trim();
+                        if (!text) continue;
+
+                        // Compute single-line height from the li's own computed style
+                        const liStyle = window.getComputedStyle(li);
+                        const singleLineH = parseFloat(liStyle.lineHeight);
+                        if (!singleLineH || singleLineH <= 0) continue;
+
+                        const liHeight = li.getBoundingClientRect().height;
+                        const actualLines = liHeight / singleLineH;
+
+                        // Determine section by walking backwards from parent <ul>
+                        let section = 'unknown';
+                        let sectionItemIndex = 0;
+                        const parentUl = li.closest('ul');
+                        if (parentUl) {
+                            let prev = parentUl.previousElementSibling;
+                            while (prev) {
+                                if (prev.tagName === 'H2') {
+                                    const h2Text = prev.textContent.trim().toLowerCase();
+                                    if (h2Text.includes('project')) section = 'projects';
+                                    else if (h2Text.includes('experience')) section = 'experience';
+                                    else if (h2Text.includes('activit') || h2Text.includes('achievement')) section = 'activities';
+                                    break;
+                                }
+                                if (prev.tagName === 'UL') sectionItemIndex++;
+                                prev = prev.previousElementSibling;
+                            }
+                        }
+
+                        const bulletIndex = parentUl
+                            ? Array.from(parentUl.children).indexOf(li)
+                            : 0;
+
+                        // Measure chars-per-line using canvas text measurement
+                        ctx.font = liStyle.font;
+                        const textWidth = ctx.measureText(text).width;
+                        const containerWidth = li.clientWidth;
+                        const avgCharWidth = textWidth / text.length;
+                        const charsPerLine = Math.floor(containerWidth / avgCharWidth);
+
+                        // Height-based line count (rounded — getBoundingClientRect
+                        // always yields integer multiples of line-height)
+                        const lineCount = Math.round(actualLines);
+                        if (lineCount <= 1) continue; // single line, no issue
+
+                        // Canvas-based estimate of last-line fill:
+                        // textWidth = total unwrapped width; containerWidth = li box
+                        const textFillLines = textWidth / containerWidth;
+                        const lastLineFillRaw = textFillLines - (lineCount - 1);
+                        const lastLineFill = Math.max(0, Math.min(1, lastLineFillRaw));
+
+                        if (lineCount === 2 && lastLineFill < 0.45) {
+                            // ORPHAN: wraps to 2nd line but it's < 45% full
+                            const targetMin = Math.floor(charsPerLine * 1.82);
+                            const targetMax = Math.floor(charsPerLine * 1.95);
+                            results.push({
+                                fix_type: 'expand',
+                                section,
+                                sectionItemIndex,
+                                bulletIndex,
+                                text,
+                                currentChars: text.length,
+                                renderedLines: lineCount,
+                                charsPerLine,
+                                targetCharsMin: targetMin,
+                                targetCharsMax: targetMax,
+                                charsToAddMin: Math.max(0, targetMin - text.length),
+                                charsToAddMax: Math.max(0, targetMax - text.length),
+                            });
+                        } else if (lineCount > 2) {
+                            // OVERSIZE: exceeds 2 rendered lines
+                            const targetMax = Math.floor(charsPerLine * 1.95);
+                            results.push({
+                                fix_type: 'shorten',
+                                section,
+                                sectionItemIndex,
+                                bulletIndex,
+                                text,
+                                currentChars: text.length,
+                                renderedLines: lineCount,
+                                charsPerLine,
+                                targetCharsMin: Math.floor(charsPerLine * 1.82),
+                                targetCharsMax: targetMax,
+                            });
+                        }
+                    }
+                    return results;
+                }"""
+            )
+            orphan_data = orphan_result or []
+            if orphan_data:
+                expand_count = sum(1 for o in orphan_data if o["fix_type"] == "expand")
+                shorten_count = sum(1 for o in orphan_data if o["fix_type"] == "shorten")
+                print(f"  Orphan detection: {expand_count} orphan(s), {shorten_count} oversize bullet(s)")
+            else:
+                print("  Orphan detection: no orphan lines found")
+        except Exception as err:
+            print(f"⚠️  Orphan detection failed: {err}")
+
+        # Measure the content height after auto-fit
         content_height = page.evaluate("() => document.body.scrollHeight")
 
         page.pdf(
@@ -391,7 +596,7 @@ def generate_pdf(
         browser.close()
 
     print(f"✅  PDF written to: {output_path.resolve()}")
-    return output_path, content_height
+    return output_path, content_height, orphan_data
 
 
 # ---------------------------------------------------------------------------

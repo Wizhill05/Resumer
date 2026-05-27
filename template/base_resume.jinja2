@@ -1,8 +1,8 @@
-<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
   <div style="text-align: left; flex: 1;">
     <h1 style="margin: 0 0 4px 0; text-align: left; line-height: 1;">{{ profile.personal_information.name }}</h1>
 {% if resume.applying_for %}
-    <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 6px;">Applying for: {{ resume.applying_for }}</div>
+    <div style="font-size: 1.05em; font-weight: bold; margin-bottom: 6px;">Applying for: {{ resume.applying_for }}</div>
 {% endif %}
     <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.88em;">
       <span><span class="iconify" data-icon="tabler:phone"></span> {{ profile.personal_information.phone }}</span> |
@@ -33,8 +33,7 @@
 ## EDUCATION
 {% for edu in profile.education %}
 
-**{{ edu.degree }}**
-~ {{ edu.institution }}
+**{{ edu.degree }}** | {{ edu.institution }}
 ~ {{ edu.duration }}
 {% endfor %}
 {% endif %}
@@ -42,11 +41,11 @@
 {% if resume.skills %}
 
 ## SKILLS
-<table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+<table class="skills-table">
 {% for skill_group in resume.skills %}
   <tr>
-    <td style="font-weight: bold; width: 28%; vertical-align: top; padding: 1px 0;">{{ skill_group.category }}</td>
-    <td style="vertical-align: top; padding: 1px 0;">{{ skill_group.items | join(', ') }}</td>
+    <td>{{ skill_group.category }}</td>
+    <td>{{ skill_group.items | join(', ') }}</td>
   </tr>
 {% endfor %}
 </table>
@@ -56,16 +55,23 @@
 
 ## PROJECTS
 {% for project in resume.projects %}
-
-{% if project.github_path and project.link %}
-**{{ project.name }}** | [{{ project.github_path }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
-{% elif project.link %}
-**{{ project.name }}** | [{{ project.link | replace('https://', '') | replace('http://', '') | replace('www.', '') }}]({{ project.link if project.link.startswith('http') else 'https://' + project.link }})
-{% else %}
-**{{ project.name }}**
+{% set project_link = (project.link or '') | trim %}
+{% set project_summary = (project.project_summary or '') | trim %}
+{% set completion_time = (project.completion_time or '') | trim %}
+{% set link_label = project.github_path if project.github_path else project_link | replace('https://', '') | replace('http://', '') | replace('www.', '') %}
+{% set name_part = project.name %}
+{% set summary_part = " | " + project_summary if project_summary else "" %}
+{% set link_md = "[" + link_label + "]" + "(" + (project_link if project_link.lower().startswith('http') else 'https://' + project_link) + ")" if project_link else "" %}
+{% set link_part = " | " + link_md if project_link else "" %}
+**{{ name_part }}{{ summary_part }}{{ link_part }}**
+{% if completion_time %}
+~ **{{ completion_time }}**
 {% endif %}
 
-{{ project.description }}
+{% for point in project.points if point %}
+- {{ point }}
+{% endfor %}
+
 {% endfor %}
 {% endif %}
 {% if resume.experience %}
@@ -73,10 +79,8 @@
 ## EXPERIENCE
 {% for exp in resume.experience %}
 
-**{{ exp.role }}**
-~ {{ exp.duration }}
-{{ exp.organization }}
-~ {{ exp.location }}
+**{{ exp.role }} | {{ exp.organization }} | {{ exp.location }}**
+~ **{{ exp.duration }}**
 {% for bullet in exp.bullets %}
 - {{ bullet }}
 {% endfor %}
@@ -86,8 +90,11 @@
 
 ## EXTRA-CURRICULAR ACTIVITIES & ACHIEVEMENTS
 {% for activity in resume.activities %}
+{% if activity.topic %}
 
 **{{ activity.topic }}**
+{% endif %}
+
 {% for bullet in activity.bullets %}
 - {{ bullet }}
 {% endfor %}

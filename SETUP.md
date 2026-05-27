@@ -69,6 +69,32 @@ uv run python src\scraping\crawl_indeed.py
 
 Writes scraped output under `src\scraping\output\`.
 
+## 4b. LinkedIn scraper CLI (3-phase pipeline)
+
+```powershell
+uv run python src\linkedin_scraping\crawl_linkedin.py
+```
+
+Build a fresh LinkedIn search URL from filters (role/location/experience/work type/date/salary tag):
+
+```powershell
+uv run python src\linkedin_scraping\crawl_linkedin.py --keywords "Software Engineer" --location "India" --geo-id 102713980 --experience-levels 1,2 --work-types 2,1 --posted-within 7d --salary-tag 5 --target-count 50
+```
+
+Print the resolved URL without scraping:
+
+```powershell
+uv run python src\linkedin_scraping\crawl_linkedin.py --keywords "Backend Engineer" --location "Bengaluru" --print-url
+```
+
+Fully formed URL can still be overridden directly:
+
+```powershell
+uv run python src\linkedin_scraping\crawl_linkedin.py --target-url "https://www.linkedin.com/jobs/search/?alertAction=viewjobs&currentJobId=4415434087&distance=25&f_E=1&f_TPR=a1778869397-&f_WT=2%2C1&geoId=102713980&keywords=Software%20Engineer&location=India&origin=JOB_SEARCH_PAGE_JOB_FILTER&sortBy=R&spellCorrectionEnabled=true" --target-count 50
+```
+
+Writes scraped output under `src\linkedin_scraping\output\`.
+
 ## 5. Auto-apply CLI (currently not reliable)
 
 Start with dry-run first:

@@ -89,6 +89,9 @@ class ResumeRunController:
         self._suppress_prompt_block = False
         self._suppress_profile_block = False
         self._suppress_final_answer_block = False
+        self._raw_log_path = ""
+        self._last_output_ts: float = 0.0
+        self._last_heartbeat_ts: float = 0.0
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -98,20 +101,25 @@ class ResumeRunController:
         *,
         jd_path: str,
         data_path: str,
-        max_iterations: int,
         job_label: str,
         model: str,
         api_key_env: str,
+        api_base: str = "",
         omissions: dict[str, bool],
         mandatory_words: list[str] | None = None,
+        agent_instructions: str = "",
+        template_path: str = "",
+        css_path: str = "",
         project_id: str = "",
         project_name: str = "",
+        raw_log_path: str = "",
     ) -> None:
         if self.is_running():
             raise RuntimeError("A run is already in progress")
 
         _ensure_windows_subprocess_event_loop_support()
 
+        self._raw_log_path = raw_log_path
         self.logs = []
         self.status = PipelineStatus(
             state="starting",
@@ -125,13 +133,12 @@ class ResumeRunController:
             "uv",
             "run",
             "python",
+            "-u",
             "src/resumer/main.py",
             "--jd",
             jd_path,
             "--data",
             data_path,
-            "--max-iterations",
-            str(max_iterations),
             "--job-label",
             job_label,
             "--model",
@@ -139,6 +146,8 @@ class ResumeRunController:
             "--api-key-env",
             api_key_env,
         ]
+        if api_base.strip():
+            cmd.extend(["--api-base", api_base.strip()])
 
         flag_map = {
             "no_objective": "--no-objective",
@@ -157,10 +166,24 @@ class ResumeRunController:
         if mandatory_words:
             cmd.append("--mandatory-words")
             cmd.extend(mandatory_words)
+        if agent_instructions.strip():
+            cmd.append("--agent-instructions")
+            cmd.append(agent_instructions)
+        if template_path.strip():
+            cmd.append("--template-path")
+            cmd.append(template_path)
+        if css_path.strip():
+            cmd.append("--css-path")
+            cmd.append(css_path)
 
         env = os.environ.copy()
         env["RESUMER_MODEL"] = model
         env["RESUMER_API_KEY_ENV"] = api_key_env
+        env["PYTHONUNBUFFERED"] = "1"
+        if api_base.strip():
+            env["RESUMER_API_BASE"] = api_base.strip()
+        else:
+            env.pop("RESUMER_API_BASE", None)
 
         creationflags = 0
         if os.name == "nt":
@@ -181,6 +204,17 @@ class ResumeRunController:
         )
 
         self.status.state = "running"
+        now = time.time()
+        self._last_output_ts = now
+        self._last_heartbeat_ts = now
+        self.logs.append(
+            LogEntry(
+                ts=now,
+                stream="event",
+                text="Run launched. Waiting for CLI output...",
+                level="event",
+            )
+        )
         self._start_reader_threads()
 
     def stop_run(self) -> None:
@@ -203,8 +237,33 @@ class ResumeRunController:
                 break
             self._consume_line(stream, line)
 
+        # Heartbeat for long silent periods (e.g., provider hangs/network stalls)
+        if self.is_running():
+            now = time.time()
+            if now - self._last_output_ts >= 30 and now - self._last_heartbeat_ts >= 30:
+                msg = "No CLI output for 30s. Still running; possible provider/API stall or network timeout."
+                self.logs.append(
+                    LogEntry(ts=now, stream="event", text=msg, level="warn")
+                )
+                if len(self.logs) > self.max_log_lines:
+                    self.logs = self.logs[-self.max_log_lines :]
+                self._last_heartbeat_ts = now
+
         if self._process is not None and self._process.poll() is not None:
             if self.status.state not in {"completed", "failed", "stopped"}:
+                # Join reader threads to make sure all final pipe output is ingested
+                for t in self._threads:
+                    if t.is_alive():
+                        t.join(timeout=1.0)
+
+                # Perform a final queue drain
+                while True:
+                    try:
+                        stream, line = self._log_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._consume_line(stream, line)
+
                 code = self._process.returncode
                 self.status.exit_code = code
                 self.status.run_finished_at = time.time()
@@ -257,9 +316,18 @@ class ResumeRunController:
                 pass
 
     def _consume_line(self, stream: str, raw_line: str) -> None:
+        if getattr(self, "_raw_log_path", ""):
+            try:
+                with open(self._raw_log_path, "a", encoding="utf-8") as f:
+                    f.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+            except Exception:
+                pass
+
         clean_line = self._normalize_log_line(_strip_ansi(raw_line))
         if not clean_line:
             return
+
+        self._last_output_ts = time.time()
 
         synthetic = self._maybe_emit_synthetic_event(clean_line, stream)
         if synthetic is None:
@@ -353,6 +421,35 @@ class ResumeRunController:
             self._suppress_final_answer_block = True
             return "Agent returned structured response"
 
+        noisy_markers = (
+            "entering new crewagentexecutor chain",
+            "finished chain",
+            "i now can give a great answer",
+            "using tool:",
+            "tool input:",
+            "tool output:",
+            "thought:",
+            "action:",
+            "action input:",
+            "observation:",
+            "valid json object",
+            "candidate truth skills json:",
+            "candidate profile json:",
+            "job analysis json:",
+            "target job description:",
+            "resume json to trim:",
+            "litellm.completion",
+        )
+        if any(marker in lower for marker in noisy_markers):
+            return None
+
+        # Suppress raw model JSON and large prompt/output fragments. The CLI emits
+        # concise stage events, so the UI does not need full prompts or payloads.
+        if len(line) > 600 and not any(
+            marker in lower for marker in ("error", "failed", "traceback")
+        ):
+            return None
+
         # Drop noisy JSON-like lines that clutter console view.
         json_noise_markers = (
             '"personal_information"',
@@ -374,11 +471,16 @@ class ResumeRunController:
         if any(marker in lower for marker in json_noise_markers):
             return None
 
-        # Make shortener phase explicit in logs.
+        if "job analysis agent:" in lower:
+            return line
+        if "summary and skills agent:" in lower:
+            return line
+        if "projects and experience agent:" in lower:
+            return line
+
+        # Surface draft iteration logs.
         if "draft iteration" in lower and "/" in line and not line.startswith("Draft"):
             return f"{line}"
-        if "shorten_resume" in lower:
-            return "Shortening"
 
         return line
 
@@ -413,12 +515,24 @@ class ResumeRunController:
         if "Task Started" in line or "Task Completed" in line or "Task Failed" in line:
             self.status.active_task = line.strip()
 
+        lower = line.lower()
+        if "job analysis agent:" in lower:
+            self.status.active_agent = "job_analyzer"
+            self.status.active_task = "analyze_job"
+        elif "summary and skills agent:" in lower:
+            self.status.active_agent = "summary_skills_writer"
+            self.status.active_task = "write_summary_skills"
+        elif "projects agent:" in lower:
+            self.status.active_agent = "projects_writer"
+            self.status.active_task = "write_projects_section"
+        elif "experience agent:" in lower:
+            self.status.active_agent = "experience_writer"
+            self.status.active_task = "write_experience_section"
+
         if "Name:" in line:
             task_match = TASK_NAME_RE.search(line)
             if task_match and "write_resume" in task_match.group(1):
                 self.status.active_task = "write_resume"
-            elif task_match and "shorten_resume" in task_match.group(1):
-                self.status.active_task = "shorten_resume"
 
         if "Output folder:" in line:
             self.status.output_dir = line.split("Output folder:", 1)[1].strip()

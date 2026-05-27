@@ -8,7 +8,7 @@ after each phase via ``LocalBackend``.
 Phases:
   1 — Scrape basic job cards from search-results pages.
   2 — Deep-fetch every job's individual page (description + attributes).
-  3 — NLP enrichment (salary normalisation + skill filter via Mistral).
+  3 — NLP enrichment (technical skill filter via Mistral).
 """
 
 from __future__ import annotations
@@ -258,34 +258,14 @@ class ScrapeService:
 
         # ── NLP helpers (inline to capture imports) ───────────────────────────
 
-        class SalaryExtraction(BaseModel):
-            min_salary_inr_per_year: float | None
-            max_salary_inr_per_year: float | None
-
         class SkillFilter(BaseModel):
             technical_skills: list[str]
 
-        def normalize_salary(pay_str: str) -> dict:
-            if not os.environ.get("MISTRAL_API_KEY"):
-                return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
-            try:
-                response = completion(
-                    model="mistral/ministral-3b-2512",
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant that converts salary strings into normalized INR per year. If given a range, extract min and max. If given a single number, set both min and max to that number. Assume standard working hours for hourly rates. 1 month = 12 months/year. Convert foreign currencies to INR at current approximate exchange rates."},
-                        {"role": "user", "content": f"Extract normalized salary in INR per year from: {pay_str}"},
-                    ],
-                    response_format=SalaryExtraction,
-                )
-                return json.loads(response.choices[0].message.content)
-            except Exception as e:
-                self._log(f"Salary NLP failed for '{pay_str}': {e}", "warn")
-                return {"min_salary_inr_per_year": None, "max_salary_inr_per_year": None}
-
-        def filter_technical_skills(attributes: list[str]) -> list[str]:
+        def filter_technical_skills(attributes: list[str]) -> list[str] | None:
             if not attributes:
                 return []
             if not os.environ.get("MISTRAL_API_KEY"):
+                self._log("MISTRAL_API_KEY env var not found; using raw attributes.", "warn")
                 return attributes
             try:
                 response = completion(
@@ -300,7 +280,7 @@ class ScrapeService:
                 return result.get("technical_skills", [])
             except Exception as e:
                 self._log(f"Skill filter NLP failed: {e}", "warn")
-                return attributes
+                return None
 
         def extract_text(element) -> str:
             if not element:
@@ -335,6 +315,7 @@ class ScrapeService:
                 "link": f"https://in.indeed.com/viewjob?jk={single_job_id}",
                 "status": "basic",
                 "scrape_session": session_id,
+                "scrape_source": "indeed",
             })
             self.status.total_jobs = 1
         else:
@@ -477,6 +458,7 @@ class ScrapeService:
             for j in all_jobs:
                 j["scrape_session"] = session_id
                 j["status"] = "basic"
+                j["scrape_source"] = "indeed"
 
             if self._stop_event.is_set():
                 self.status.state = "stopped"
@@ -531,18 +513,94 @@ class ScrapeService:
                             details["description"] = extract_text(desc_elem[0])
                         
                         if is_single_job_direct:
-                            details["title"] = extract_text(dp_sel.css('h1'))
-                            details["company"] = extract_text(dp_sel.css('[data-testid="inlineHeader-companyName"]'))
-                            details["location"] = extract_text(dp_sel.css('[data-testid="inlineHeader-companyLocation"]'))
-                            
+                            # Fallback selectors for title
+                            title_selectors = [
+                                'h1.jobsearch-JobInfoHeader-title',
+                                '.jobsearch-JobInfoHeader-title-container h1',
+                                'h1',
+                                '.jobsearch-JobInfoHeader-title',
+                            ]
+                            title_text = ""
+                            for sel in title_selectors:
+                                elem = dp_sel.css(sel)
+                                if elem:
+                                    title_text = extract_text(elem[0])
+                                    if title_text:
+                                        break
+                            details["title"] = title_text
+
+                            # Fallback selectors for company
+                            company_selectors = [
+                                '[data-testid="inlineHeader-companyName"]',
+                                '.jobsearch-InlineCompanyRating a',
+                                '.jobsearch-InlineCompanyRating div',
+                                '.jobsearch-CompanyInfoContainer a',
+                                '[data-company-name="true"]',
+                                '.jobsearch-InlineCompanyRating-companyHeader',
+                            ]
+                            company_text = ""
+                            for sel in company_selectors:
+                                elem = dp_sel.css(sel)
+                                if elem:
+                                    company_text = extract_text(elem[0])
+                                    if company_text:
+                                        break
+                            details["company"] = company_text
+
+                            # Fallback selectors for location
+                            location_selectors = [
+                                '[data-testid="inlineHeader-companyLocation"]',
+                                '.jobsearch-JobInfoHeader-subtitle div',
+                                '[data-testid="jobsearch-JobInfoHeader-companyLocation"]',
+                                '.jobsearch-JobInfoContainer > div',
+                            ]
+                            location_text = ""
+                            for sel in location_selectors:
+                                elem = dp_sel.css(sel)
+                                if elem:
+                                    for el in elem:
+                                        t = extract_text(el)
+                                        if t and t != company_text:
+                                            location_text = t
+                                            break
+                                    if location_text:
+                                        break
+                            if not location_text and dp_sel.css('[data-testid="inlineHeader-companyLocation"]'):
+                                location_text = extract_text(dp_sel.css('[data-testid="inlineHeader-companyLocation"]')[0])
+                            details["location"] = location_text
+
                             pay_elem = dp_sel.css('#salaryInfoAndJobType')
                             if pay_elem:
                                 details["pay"] = extract_text(pay_elem[0])
-                        
-                        pattern = re.compile(r'"__typename":"JobAttribute","key":"[^"]+","label":"([^"]+)"')
-                        matches = pattern.findall(dp_html)
-                        if matches:
-                            details["raw_attributes"] = list(set(matches))
+
+                        # Robust parsing of JobAttribute elements from Apollo JSON cache
+                        attributes = []
+                        obj_pattern = re.compile(
+                            r'\{[^{}]*?["\']__typename["\']\s*:\s*["\']JobAttribute["\'][^{}]*?\}',
+                            flags=re.IGNORECASE
+                        )
+                        label_pattern = re.compile(
+                            r'["\']label["\']\s*:\s*["\']([^"\']+)["\']',
+                            flags=re.IGNORECASE
+                        )
+                        for obj_match in obj_pattern.finditer(dp_html):
+                            obj_str = obj_match.group(0)
+                            label_match = label_pattern.search(obj_str)
+                            if label_match:
+                                try:
+                                    # Decode unicode escape characters if present
+                                    label = label_match.group(1).encode().decode('unicode-escape')
+                                except Exception:
+                                    label = label_match.group(1)
+                                attributes.append(label)
+
+                        # Fallback to direct regex match if JSON-like regex found nothing
+                        if not attributes:
+                            pattern = re.compile(r'"__typename":"JobAttribute","key":"[^"]+","label":"([^"]+)"')
+                            attributes = pattern.findall(dp_html)
+
+                        if attributes:
+                            details["raw_attributes"] = list(set(attributes))
                         break
                     except Exception as e:
                         self._log(f"Deep fetch attempt {attempt}/3 failed: {e}", "error")
@@ -588,22 +646,22 @@ class ScrapeService:
             self._log(f"[{idx}/{len(all_jobs)}] NLP: {job.get('title', '?')} @ {job.get('company', '?')}")
             self.status.progress = f"{idx}/{len(all_jobs)} NLP processed"
 
-            # Salary
-            if job.get("pay"):
-                safe_pay = job["pay"].encode("ascii", "ignore").decode("ascii")
-                self._log(f"  Normalizing salary: {safe_pay}")
-                normalized = normalize_salary(job["pay"])
-                if normalized:
-                    job["min_salary_inr"] = normalized.get("min_salary_inr_per_year")
-                    job["max_salary_inr"] = normalized.get("max_salary_inr_per_year")
-
             # Skills
             raw_attrs = job.pop("raw_attributes", None)
+            nlp_failed = False
             if raw_attrs:
                 self._log(f"  Filtering {len(raw_attrs)} attributes via Mistral...")
-                job["technical_skills"] = filter_technical_skills(raw_attrs)
+                filtered_skills = filter_technical_skills(raw_attrs)
+                if filtered_skills is None:
+                    job["technical_skills"] = raw_attrs
+                    nlp_failed = True
+                else:
+                    job["technical_skills"] = filtered_skills
 
-            job["status"] = "nlp_done"
+            if nlp_failed:
+                job["status"] = "nlp_failed"
+            else:
+                job["status"] = "nlp_done"
             
             # Save immediately so UI updates incrementally
             self._backend.upsert_scraped_job(job)

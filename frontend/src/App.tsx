@@ -2,6 +2,7 @@ import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
 import ProfilesPage from './pages/ProfilesPage'
 import GeneratePage from './pages/GeneratePage'
 import ScrapePage from './pages/ScrapePage'
+import LinkedinScrapePage from './pages/LinkedinScrapePage'
 import JobLibraryPage from './pages/JobLibraryPage'
 import BatchProcessingPage from './pages/BatchProcessingPage'
 
@@ -29,16 +30,22 @@ export default function App() {
           03 / SCRAPE INDEED
         </NavLink>
         <NavLink
+          to="/scrape-linkedin"
+          className={({ isActive }) => `bp-nav-link${isActive ? ' active' : ''}`}
+        >
+          04 / SCRAPE LINKEDIN
+        </NavLink>
+        <NavLink
           to="/library"
           className={({ isActive }) => `bp-nav-link${isActive ? ' active' : ''}`}
         >
-          04 / JOB LIBRARY
+          05 / JOB LIBRARY
         </NavLink>
         <NavLink
           to="/batch"
           className={({ isActive }) => `bp-nav-link${isActive ? ' active' : ''}`}
         >
-          05 / BATCH PROCESS
+          06 / BATCH PROCESS
         </NavLink>
         <div style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 10, letterSpacing: '0.1em' }}>
           RESUMER · LOCAL
@@ -51,6 +58,7 @@ export default function App() {
           <Route path="/profiles" element={<ProfilesPage />} />
           <Route path="/generate" element={<GeneratePage />} />
           <Route path="/scrape" element={<ScrapePage />} />
+          <Route path="/scrape-linkedin" element={<LinkedinScrapePage />} />
           <Route path="/library" element={<JobLibraryPage />} />
           <Route path="/batch" element={<BatchProcessingPage />} />
         </Routes>

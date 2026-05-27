@@ -11,6 +11,8 @@ Optional flags:
     --job-label <name>                        (optional, skips prompt)
     --model <provider/model-id>               (optional runtime model override)
     --api-key-env <ENV_VAR>                   (optional API key env override)
+    --api-base <URL>                          (optional custom provider base URL)
+    --agent-instructions "<text>"             (optional extra model guidance)
     --no-objective    Omit the objective section
     --no-education    Omit the education section
     --no-skills       Omit the skills section
@@ -28,12 +30,18 @@ Auth:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib
 import json
 import re
 import shutil
 import sys
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 # Ensure project root is on sys.path for imports
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -54,7 +62,19 @@ import os  # noqa: E402
 
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
-from schemas.resume_schema import TailoredResume  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from schemas.resume_schema import (  # noqa: E402
+    ActivityGroup,
+    ExperienceDraft,
+    JobAnalysis,
+    ProjectsDraft,
+    SkillCategory,
+    SummarySkillsDraft,
+    TailoredExperience,
+    TailoredProject,
+    TailoredResume,
+)
 from src.resumer.tools.pdf_tools import set_shared_state  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -100,7 +120,133 @@ def _banner(msg: str) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # project root
-MAX_SHORTENING_ITERATIONS = 5
+TARGET_INDIVIDUAL_SKILLS = 15
+TModel = TypeVar("TModel", bound=BaseModel)
+_PROJECT_ACTION_VERBS = {
+    "accelerated",
+    "automated",
+    "built",
+    "created",
+    "delivered",
+    "designed",
+    "developed",
+    "enabled",
+    "engineered",
+    "implemented",
+    "improved",
+    "integrated",
+    "launched",
+    "led",
+    "optimized",
+    "reduced",
+    "scaled",
+    "streamlined",
+    "strengthened",
+}
+_PROJECT_ACTION_VERB_FALLBACKS = ("Built", "Optimized", "Delivered")
+_MODEL_TRACE_PATH: Path | None = None
+_MODEL_TRACE_LOCK = threading.Lock()
+_MODEL_TRACE_ENTRY_INDEX = 0
+_MODEL_TRACE_CONTEXT: dict[str, Any] = {}
+
+
+def _to_trace_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        return json.dumps({"repr": repr(value)}, ensure_ascii=False, indent=2)
+
+
+def _escape_fenced_text(text: str) -> str:
+    return text.replace("```", "``\\`")
+
+
+def _init_model_trace_artifact(
+    *,
+    output_dir: Path,
+    model: str,
+    job_label: str,
+    profile_name: str,
+    job_description: str,
+) -> None:
+    global _MODEL_TRACE_PATH, _MODEL_TRACE_ENTRY_INDEX, _MODEL_TRACE_CONTEXT
+    jd_sha256 = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    trace_path = output_dir / "model_conversations.md"
+    header = (
+        "# Model Conversation Logs\n\n"
+        f"- **Model:** `{model}`\n"
+        f"- **Run Label:** `{job_label}`\n"
+        f"- **Profile:** `{profile_name}`\n"
+        f"- **Job Description SHA-256:** `{jd_sha256}`\n"
+        f"- **Job Description Chars:** `{len(job_description)}`\n\n"
+        "## Job Description Context\n\n"
+        "```text\n"
+        f"{_escape_fenced_text(job_description)}\n"
+        "```\n\n"
+        "---\n"
+    )
+    try:
+        trace_path.write_text(header, encoding="utf-8")
+    except Exception as exc:
+        _warn(f"Could not initialize model conversation log: {exc}")
+        _MODEL_TRACE_PATH = None
+        _MODEL_TRACE_ENTRY_INDEX = 0
+        _MODEL_TRACE_CONTEXT = {}
+        return
+    _MODEL_TRACE_PATH = trace_path
+    _MODEL_TRACE_ENTRY_INDEX = 0
+    _MODEL_TRACE_CONTEXT = {
+        "jd_sha256": jd_sha256,
+        "jd_chars": len(job_description),
+    }
+
+
+def _append_model_trace_entry(
+    *,
+    label: str,
+    crew_method_name: str,
+    attempt: int,
+    attempts: int,
+    inputs: dict[str, Any],
+    output_text: str = "",
+    error_text: str = "",
+) -> None:
+    global _MODEL_TRACE_ENTRY_INDEX
+    if _MODEL_TRACE_PATH is None:
+        return
+    with _MODEL_TRACE_LOCK:
+        _MODEL_TRACE_ENTRY_INDEX += 1
+        index = _MODEL_TRACE_ENTRY_INDEX
+        timestamp = datetime.now(timezone.utc).isoformat()
+        jd_sha256 = str(_MODEL_TRACE_CONTEXT.get("jd_sha256", ""))
+        jd_chars = int(_MODEL_TRACE_CONTEXT.get("jd_chars", 0) or 0)
+        section = (
+            f"\n## {index}. {label} (`{crew_method_name}`) — attempt {attempt}/{attempts}\n\n"
+            f"- **Timestamp (UTC):** `{timestamp}`\n"
+            f"- **Linked Job Description SHA-256:** `{jd_sha256}`\n"
+            f"- **Linked Job Description Chars:** `{jd_chars}`\n\n"
+            "### Inputs\n\n"
+            "```json\n"
+            f"{_to_trace_json(inputs)}\n"
+            "```\n\n"
+        )
+        if output_text.strip():
+            section += (
+                "### Model Output (raw)\n\n"
+                "```text\n"
+                f"{_escape_fenced_text(output_text)}\n"
+                "```\n\n"
+            )
+        if error_text.strip():
+            section += (
+                "### Error\n\n"
+                "```text\n"
+                f"{_escape_fenced_text(error_text)}\n"
+                "```\n\n"
+            )
+        section += "---\n"
+        with _MODEL_TRACE_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(section)
 
 
 def _sanitize_folder_name(name: str) -> str:
@@ -110,32 +256,659 @@ def _sanitize_folder_name(name: str) -> str:
     return name.strip("_")
 
 
-def _sanitize_max_iterations(value: int) -> int:
-    return max(1, min(MAX_SHORTENING_ITERATIONS, value))
-
-
-def _write_single_page_pdf(source_pdf: Path, output_pdf: Path) -> None:
-    reader = PdfReader(str(source_pdf))
-    if not reader.pages:
-        raise ValueError(f"Source PDF has no pages: {source_pdf}")
-    writer = PdfWriter()
-    writer.add_page(reader.pages[0])
-    with output_pdf.open("wb") as fh:
-        writer.write(fh)
-
 
 def _extract_json_object(raw_text: str) -> str:
-    """Extract the first JSON object from model output text."""
+    """Extract the first matching JSON object or array using a brace/bracket stack."""
+    raw_text = raw_text.strip()
+    
+    # Try standard fenced regex first
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
     if fenced:
         return fenced.group(1).strip()
 
-    first = raw_text.find("{")
-    last = raw_text.rfind("}")
-    if first != -1 and last != -1 and first < last:
-        return raw_text[first : last + 1].strip()
+    start_idx = raw_text.find("{")
+    if start_idx == -1:
+        start_idx = raw_text.find("[")
+    if start_idx == -1:
+        return raw_text
 
-    return raw_text.strip()
+    stack = []
+    in_string = False
+    escape = False
+
+    for i in range(start_idx, len(raw_text)):
+        char = raw_text[i]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+        else:
+            if char == '"':
+                in_string = True
+            elif char in ("{", "["):
+                stack.append(char)
+            elif char in ("}", "]"):
+                if not stack:
+                    continue
+                last_open = stack.pop()
+                if not stack:
+                    # Stack is empty! We found the exact matching end.
+                    return raw_text[start_idx : i + 1]
+
+    # If stack never emptied, fall back to extracting from first to last
+    last_idx = raw_text.rfind("}")
+    if last_idx == -1:
+        last_idx = raw_text.rfind("]")
+    if last_idx != -1 and start_idx < last_idx:
+        return raw_text[start_idx : last_idx + 1]
+
+    return raw_text
+
+
+def _result_to_raw_text(result: Any) -> str:
+    task_output = (
+        result.tasks_output[-1]
+        if hasattr(result, "tasks_output") and result.tasks_output
+        else None
+    )
+    if task_output and hasattr(task_output, "pydantic") and task_output.pydantic:
+        return task_output.pydantic.model_dump_json()
+    if task_output:
+        raw = (getattr(task_output, "raw", "") or "").strip()
+        if raw:
+            return raw
+    raw = (getattr(result, "raw", "") or "").strip()
+    return raw or str(result).strip()
+
+
+def _parse_model_json(raw_text: str, model_type: type[TModel]) -> TModel:
+    json_text = _extract_json_object(raw_text)
+    parsed = json.loads(json_text)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{model_type.__name__} output must be a JSON object")
+    return model_type.model_validate(parsed)
+
+
+def _dedupe_preserve_order(values: list[Any], limit: int | None = None) -> list[str]:
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        item = re.sub(r"\s+", " ", str(value)).strip(" ,;")
+        if not item:
+            continue
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(item)
+        if limit is not None and len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _normalize_skill_item(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value)).strip(" ,;")
+
+
+def _count_individual_skill_items(skills_value: Any) -> int:
+    if not isinstance(skills_value, list):
+        return 0
+    seen: set[str] = set()
+    for group in skills_value:
+        if isinstance(group, SkillCategory):
+            items = group.items
+        elif isinstance(group, dict):
+            items = group.get("items")
+        else:
+            continue
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            cleaned = _normalize_skill_item(item)
+            if not cleaned:
+                continue
+            seen.add(cleaned.casefold())
+    return len(seen)
+
+
+def _ensure_minimum_skill_groups(
+    skills_value: Any,
+    *,
+    skill_pool: list[str],
+    min_count: int,
+    max_count: int | None = None,
+) -> list[dict[str, Any]]:
+    normalized_groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    if isinstance(skills_value, list):
+        for group in skills_value:
+            if isinstance(group, SkillCategory):
+                category = group.category.strip() or "Additional Skills"
+                raw_items: Any = group.items
+            elif isinstance(group, dict):
+                category = str(group.get("category", "")).strip() or "Additional Skills"
+                raw_items = group.get("items")
+            else:
+                continue
+
+            if isinstance(raw_items, str):
+                raw_items = [raw_items]
+            if not isinstance(raw_items, list):
+                continue
+
+            cleaned_items: list[str] = []
+            for item in raw_items:
+                cleaned = _normalize_skill_item(item)
+                if not cleaned:
+                    continue
+                key = cleaned.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned_items.append(cleaned)
+            if cleaned_items:
+                normalized_groups.append({"category": category, "items": cleaned_items})
+
+    if not normalized_groups:
+        normalized_groups.append({"category": "Additional Skills", "items": []})
+
+    target_index = next(
+        (
+            i
+            for i, group in enumerate(normalized_groups)
+            if str(group.get("category", "")).strip().casefold()
+            not in {"soft skills", "soft skill"}
+        ),
+        0,
+    )
+
+    for candidate in skill_pool:
+        if len(seen) >= min_count:
+            break
+        cleaned = _normalize_skill_item(candidate)
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_groups[target_index]["items"].append(cleaned)
+
+    if max_count is not None and max_count > 0:
+        priority_index = {
+            _normalize_skill_item(item).casefold(): idx
+            for idx, item in enumerate(skill_pool)
+            if _normalize_skill_item(item)
+        }
+        flattened: list[tuple[int, int, int, str]] = []
+        for group_idx, group in enumerate(normalized_groups):
+            items = group.get("items")
+            if not isinstance(items, list):
+                continue
+            for item_idx, item in enumerate(items):
+                key = _normalize_skill_item(item).casefold()
+                if not key:
+                    continue
+                fallback_rank = len(priority_index) + (group_idx * 1000) + item_idx
+                flattened.append((priority_index.get(key, fallback_rank), group_idx, item_idx, key))
+
+        if len(flattened) > max_count:
+            flattened.sort(key=lambda value: (value[0], value[1], value[2]))
+            selected = {key for _, _, _, key in flattened[:max_count]}
+            trimmed_groups: list[dict[str, Any]] = []
+            for group in normalized_groups:
+                items = group.get("items")
+                if not isinstance(items, list):
+                    continue
+                kept = [item for item in items if _normalize_skill_item(item).casefold() in selected]
+                if kept:
+                    trimmed_groups.append({"category": group.get("category", "Additional Skills"), "items": kept})
+            normalized_groups = trimmed_groups
+
+    return [group for group in normalized_groups if group.get("items")]
+
+
+def _collect_profile_skill_terms(profile: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+
+    skills = profile.get("skills")
+    if isinstance(skills, dict):
+        for value in skills.values():
+            if isinstance(value, list):
+                terms.extend(value)
+            elif isinstance(value, str):
+                terms.extend([part.strip() for part in value.split(",") if part.strip()])
+    elif isinstance(skills, list):
+        terms.extend(skills)
+
+    for section_key in ("projects", "experience"):
+        section = profile.get(section_key)
+        if not isinstance(section, list):
+            continue
+        for item in section:
+            if not isinstance(item, dict):
+                continue
+            for field in ("technologies", "skills", "tools", "stack"):
+                value = item.get(field)
+                if isinstance(value, list):
+                    terms.extend(value)
+                elif isinstance(value, str):
+                    terms.extend(
+                        [part.strip() for part in value.split(",") if part.strip()]
+                    )
+
+    return _dedupe_preserve_order(terms)
+
+
+def _build_skill_pool(profile: dict[str, Any], job_analysis: JobAnalysis) -> list[str]:
+    return _dedupe_preserve_order(
+        list(job_analysis.required_skills)
+        + list(job_analysis.preferred_skills)
+        + list(job_analysis.keywords)
+        + _collect_profile_skill_terms(profile)
+    )
+
+
+def _sanitize_em_dashes(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("—", ",")
+    if isinstance(value, list):
+        return [_sanitize_em_dashes(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_em_dashes(item) for key, item in value.items()}
+    return value
+
+
+def _normalize_github_path(link: str | None) -> str | None:
+    if not link:
+        return None
+    stripped = link.strip()
+    if not stripped:
+        return None
+    match = re.search(r"github\.com/([^/\s]+/[^/\s#?]+)", stripped, re.IGNORECASE)
+    if match:
+        return match.group(1).strip("/")
+    if re.match(r"^[\w.-]+/[\w.-]+$", stripped):
+        return stripped
+    return None
+
+
+def _ensure_url(link: str | None) -> str | None:
+    if not link:
+        return None
+    link = link.strip()
+    if not link:
+        return None
+    if link.casefold() in {"n/a", "na", "none", "null", "no link", "not available", "-"}:
+        return None
+    if link.startswith(("http://", "https://")):
+        return link
+    return f"https://{link}"
+
+
+def _canonical_project_link(link: str | None) -> str | None:
+    resolved = _ensure_url(link)
+    if not resolved:
+        return None
+    parsed = urlparse(resolved)
+    host = parsed.netloc.strip().casefold()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return None
+    path = re.sub(r"/+", "/", parsed.path).strip().rstrip("/")
+    return f"{host}{path}".casefold()
+
+
+def _collect_profile_project_links(profile: dict[str, Any]) -> set[str]:
+    known_links: set[str] = set()
+    projects = profile.get("projects")
+    if not isinstance(projects, list):
+        return known_links
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        for key in ("link", "url", "github"):
+            value = project.get(key)
+            if isinstance(value, str):
+                canonical = _canonical_project_link(value)
+                if canonical:
+                    known_links.add(canonical)
+    return known_links
+
+
+def _link_allowed_for_profile(link: str | None, known_links: set[str]) -> str | None:
+    resolved = _ensure_url(link)
+    if not resolved:
+        return None
+    canonical = _canonical_project_link(resolved)
+    if not canonical:
+        return None
+    if canonical not in known_links:
+        return None
+    return resolved
+
+
+def _haystack_contains_term(haystack: str, term: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", term).strip()
+    if not cleaned:
+        return True
+    return cleaned.casefold() in haystack.casefold()
+
+
+def _missing_required_terms(summary_skills: SummarySkillsDraft, required: list[str]) -> list[str]:
+    skill_text = " ".join(
+        [summary_skills.professional_summary]
+        + [
+            f"{group.category} {' '.join(group.items)}"
+            for group in summary_skills.skills
+        ]
+    )
+    return [term for term in required if not _haystack_contains_term(skill_text, term)]
+
+
+def _profile_skills_json(profile: dict[str, Any]) -> str:
+    return json.dumps(profile.get("skills", {}), ensure_ascii=False, indent=2)
+
+
+def _merge_mandatory_words(job_analysis: JobAnalysis, mandatory_words: list[str]) -> JobAnalysis:
+    data = job_analysis.model_dump()
+    data["required_skills"] = _dedupe_preserve_order(data.get("required_skills", []), limit=10)
+    overflow_required = [
+        skill
+        for skill in job_analysis.required_skills
+        if skill not in data["required_skills"]
+    ]
+    data["preferred_skills"] = _dedupe_preserve_order(
+        list(data.get("preferred_skills", [])) + overflow_required + mandatory_words
+    )
+    data["key_responsibilities"] = _dedupe_preserve_order(
+        data.get("key_responsibilities", [])
+    )
+    data["keywords"] = _dedupe_preserve_order(data.get("keywords", []))
+    return JobAnalysis.model_validate(data)
+
+
+def _ensure_minimum_summary_skills(
+    summary_skills: SummarySkillsDraft,
+    *,
+    skill_pool: list[str],
+    min_count: int,
+    max_count: int | None = None,
+) -> SummarySkillsDraft:
+    data = summary_skills.model_dump()
+    data["skills"] = _ensure_minimum_skill_groups(
+        data.get("skills", []),
+        skill_pool=skill_pool,
+        min_count=min_count,
+        max_count=max_count,
+    )
+    return SummarySkillsDraft.model_validate(data)
+
+
+def _assemble_tailored_resume(
+    *,
+    job_analysis: JobAnalysis,
+    summary_skills: SummarySkillsDraft,
+    projects_draft: ProjectsDraft,
+    experience_draft: ExperienceDraft,
+    profile_project_links: set[str],
+) -> str:
+    projects: list[TailoredProject] = []
+    for key, project in projects_draft.projects.items():
+        name = project.name.strip() or key.replace("_", " ").title()
+        url = _link_allowed_for_profile(project.link, profile_project_links)
+        source_points = _split_project_description_points(project.points)
+        if not source_points and isinstance(project.description, str):
+            source_points = _split_project_description_points(project.description)
+        normalized_points = _ensure_project_point_count(
+            source_points,
+            project_name=name,
+            project_domain=project.domain,
+        )
+        if not normalized_points:
+            continue
+        projects.append(
+            TailoredProject(
+                name=name,
+                project_summary=project.project_summary,
+                completion_time=project.completion_time,
+                link=url,
+                github_path=_normalize_github_path(url),
+                points=normalized_points,
+            )
+        )
+
+    raw_experience = list(experience_draft.work_experience.values())
+    normal_experience = [
+        item for item in raw_experience if not _is_independent_projects_experience(item)
+    ]
+    fallback_experience = [
+        item for item in raw_experience if _is_independent_projects_experience(item)
+    ]
+    selected_experience = normal_experience[:2]
+    if len(selected_experience) < 2:
+        selected_experience.extend(fallback_experience[: 2 - len(selected_experience)])
+
+    experience: list[TailoredExperience] = []
+    for item in selected_experience:
+        bullets = [
+            _strip_markdown_artifacts(point, preserve_bold=True)
+            for point in item.points
+            if point.strip()
+        ]
+        if not bullets:
+            continue
+        experience.append(
+            TailoredExperience(
+                role=item.role,
+                organization=item.company_name,
+                location=item.location,
+                duration=item.time_period,
+                bullets=bullets[:3],
+            )
+        )
+
+    activities = []
+    activity_bullets = [
+        _strip_markdown_artifacts(item, preserve_bold=True)
+        for item in summary_skills.extra_curricular
+        if str(item).strip()
+    ]
+    if activity_bullets:
+        activities.append(
+            ActivityGroup(topic="Achievements", bullets=activity_bullets[:4])
+        )
+
+    resume = TailoredResume(
+        applying_for=job_analysis.applying_for,
+        objective=summary_skills.professional_summary,
+        skills=summary_skills.skills,
+        projects=projects or None,
+        experience=experience or None,
+        activities=activities or None,
+    )
+    sanitized = _sanitize_em_dashes(resume.model_dump())
+    return TailoredResume.model_validate(sanitized).model_dump_json()
+
+
+def _is_independent_projects_experience(item: SectionExperience) -> bool:
+    marker = f"{item.role} {item.company_name}".casefold()
+    independent_markers = (
+        "independent projects",
+        "independent project",
+        "personal projects",
+        "self-directed",
+        "self directed",
+    )
+    return any(value in marker for value in independent_markers)
+
+
+def _normalize_professional_summary_wording(summary: str) -> str:
+    normalized = re.sub(
+        r"\binternships?\b",
+        "developer role",
+        summary,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"\binterns?\b",
+        "developer",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _apply_omission_flags_to_json(
+    current_json: str,
+    *,
+    args: argparse.Namespace,
+    jd: str,
+) -> str:
+    data = json.loads(current_json)
+    if not args.no_applying_for and not data.get("applying_for"):
+        inferred_role = _infer_applying_for_from_jd(jd)
+        if inferred_role:
+            data["applying_for"] = inferred_role
+    if args.no_objective:
+        data["objective"] = None
+    if args.no_skills:
+        data["skills"] = None
+    if args.no_projects:
+        data["projects"] = None
+    if args.no_experience:
+        data["experience"] = None
+    if args.no_activities:
+        data["activities"] = None
+    if args.no_applying_for:
+        data["applying_for"] = None
+    if isinstance(data.get("objective"), str):
+        data["objective"] = _normalize_professional_summary_wording(
+            data["objective"]
+        )
+    return json.dumps(_sanitize_em_dashes(data), ensure_ascii=False, indent=2)
+
+
+def _kickoff_with_retries(
+    *,
+    crew_method_name: str,
+    inputs: dict[str, Any],
+    label: str,
+    attempts: int = 3,
+    delay_seconds: float = 5.0,
+) -> Any:
+    from src.resumer.crew import ResumerCrew  # noqa: E402
+
+    last_error: Exception | None = None
+    rate_limit_delays = [5, 15, 60]  # escalating backoff for 429s
+    for attempt in range(1, attempts + 1):
+        try:
+            _info(f"{label}: starting attempt {attempt}/{attempts}")
+            crew_instance = ResumerCrew()
+            crew_method = getattr(crew_instance, crew_method_name)
+            result = crew_method().kickoff(inputs=inputs)
+            try:
+                output_text = _result_to_raw_text(result)
+            except Exception:
+                output_text = str(result)
+            _append_model_trace_entry(
+                label=label,
+                crew_method_name=crew_method_name,
+                attempt=attempt,
+                attempts=attempts,
+                inputs=inputs,
+                output_text=output_text,
+            )
+            return result
+        except Exception as exc:
+            last_error = exc
+            _warn(f"{label}: attempt {attempt}/{attempts} failed: {exc}")
+            _append_model_trace_entry(
+                label=label,
+                crew_method_name=crew_method_name,
+                attempt=attempt,
+                attempts=attempts,
+                inputs=inputs,
+                error_text=str(exc),
+            )
+            if attempt < attempts:
+                exc_str = str(exc).lower()
+                is_rate_limit = "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str
+                if is_rate_limit:
+                    rl_delay = rate_limit_delays[min(attempt - 1, len(rate_limit_delays) - 1)]
+                    _warn(f"Rate limited — waiting {rl_delay}s before retry...")
+                    time.sleep(rl_delay)
+                else:
+                    time.sleep(delay_seconds)
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"{label} failed without an exception")
+
+
+async def _run_summary_projects_and_experience(
+    *,
+    job_analysis_json: str,
+    truth_skills_json: str,
+    profile_json: str,
+    mandatory_words_text: str,
+    agent_instructions_text: str,
+    attempt_feedback: str,
+) -> tuple[Any, Any, Any]:
+    summary_inputs = {
+        "job_analysis_json": job_analysis_json,
+        "profile_json": profile_json,
+        "truth_skills_json": truth_skills_json,
+        "mandatory_words": mandatory_words_text,
+        "agent_instructions": agent_instructions_text,
+        "attempt_feedback": attempt_feedback,
+    }
+    projects_inputs = {
+        "job_analysis_json": job_analysis_json,
+        "profile_json": profile_json,
+        "agent_instructions": agent_instructions_text,
+        "attempt_feedback": attempt_feedback,
+    }
+    experience_inputs = {
+        "job_analysis_json": job_analysis_json,
+        "profile_json": profile_json,
+        "agent_instructions": agent_instructions_text,
+        "attempt_feedback": attempt_feedback,
+    }
+
+    summary_task = asyncio.to_thread(
+        _kickoff_with_retries,
+        crew_method_name="summary_skills_crew",
+        inputs=summary_inputs,
+        label="Summary and skills agent",
+    )
+
+    async def delayed_projects() -> Any:
+        await asyncio.sleep(5)
+        return await asyncio.to_thread(
+            _kickoff_with_retries,
+            crew_method_name="projects_crew",
+            inputs=projects_inputs,
+            label="Projects agent",
+        )
+
+    async def delayed_experience() -> Any:
+        await asyncio.sleep(10)
+        return await asyncio.to_thread(
+            _kickoff_with_retries,
+            crew_method_name="experience_crew",
+            inputs=experience_inputs,
+            label="Experience agent",
+        )
+
+    return await asyncio.gather(summary_task, delayed_projects(), delayed_experience())
 
 
 def _infer_applying_for_from_jd(job_description: str) -> str | None:
@@ -246,11 +1019,19 @@ def _infer_applying_for_from_jd(job_description: str) -> str | None:
     return sorted(cleaned_candidates, key=lambda role: (len(role.split()), len(role)))[0]
 
 
-def _strip_markdown_artifacts(text: str) -> str:
+def _strip_markdown_artifacts(text: str, *, preserve_bold: bool = False) -> str:
     """
     Convert markdown-ish inline formatting to plain text for fields that should
     render as normal prose (e.g., project descriptions).
     """
+    protected_bold: list[str] = []
+    if preserve_bold:
+        def protect(match: re.Match[str]) -> str:
+            protected_bold.append(match.group(0))
+            return f"@@BOLDTOKEN{len(protected_bold) - 1}@@"
+
+        text = re.sub(r"\*\*(?!\s).+?(?<!\s)\*\*", protect, text)
+
     # Links: [text](url) -> text
     cleaned = re.sub(r"\[([^\]]+)\]\((?:[^)]+)\)", r"\1", text)
     # Inline code: `text` -> text
@@ -261,10 +1042,133 @@ def _strip_markdown_artifacts(text: str) -> str:
     # Flatten accidental list markers into plain prose
     cleaned = re.sub(r"(?m)^\s*[-•]\s+", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if preserve_bold:
+        for index, value in enumerate(protected_bold):
+            cleaned = cleaned.replace(f"@@BOLDTOKEN{index}@@", value)
     return cleaned
 
 
-def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _split_project_description_points(description: Any) -> list[str]:
+    if isinstance(description, list):
+        chunks = [
+            re.sub(
+                r"^\s*(?:[-•*]|\d+[.)])\s*",
+                "",
+                _strip_markdown_artifacts(str(point), preserve_bold=True),
+            ).strip(" ;")
+            for point in description
+            if str(point).strip()
+        ]
+        return [chunk for chunk in chunks if chunk][:3]
+
+    if not isinstance(description, str):
+        return []
+
+    cleaned = _strip_markdown_artifacts(description, preserve_bold=True)
+    if not cleaned:
+        return []
+
+    normalized_numbers = re.sub(r"\s*(\d+)[.)]\s+", r"\n\1. ", cleaned)
+    chunks = [
+        re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", chunk).strip()
+        for chunk in re.split(r"[\r\n]+", normalized_numbers)
+        if chunk.strip()
+    ]
+    if len(chunks) < 3:
+        sentence_chunks = [
+            sentence.strip(" ;")
+            for sentence in re.split(r"(?<=[.!?;])\s+", cleaned)
+            if sentence.strip(" ;")
+        ]
+        if len(sentence_chunks) > len(chunks):
+            chunks = sentence_chunks
+
+    while len(chunks) < 3:
+        split_done = False
+        for index, chunk in enumerate(list(chunks)):
+            parts = [
+                part.strip(" ,;")
+                for part in re.split(r",\s+|\s+and\s+", chunk, maxsplit=1)
+                if part.strip(" ,;")
+            ]
+            if len(parts) > 1:
+                chunks[index : index + 1] = parts
+                split_done = True
+                break
+        if not split_done:
+            break
+
+    return [chunk for chunk in chunks if chunk][:3]
+
+
+def _ensure_project_action_verb(point: str, fallback_verb: str) -> str:
+    cleaned = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", point).strip(" ;")
+    if not cleaned:
+        return ""
+
+    first_word_match = re.match(r"[A-Za-z]+", cleaned)
+    first_word = first_word_match.group(0).lower() if first_word_match else ""
+    if first_word not in _PROJECT_ACTION_VERBS:
+        cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+        cleaned = f"{fallback_verb} {cleaned}".strip()
+
+    cleaned = cleaned.rstrip(".")
+    return f"{cleaned}."
+
+
+def _normalize_project_points(points: list[str]) -> list[str]:
+    formatted_points: list[str] = []
+    for index, point in enumerate(points[:3]):
+        fallback_verb = _PROJECT_ACTION_VERB_FALLBACKS[
+            min(index, len(_PROJECT_ACTION_VERB_FALLBACKS) - 1)
+        ]
+        normalized = _ensure_project_action_verb(str(point), fallback_verb)
+        if normalized:
+            formatted_points.append(normalized)
+    return formatted_points
+
+
+def _ensure_project_point_count(
+    points: list[str],
+    *,
+    project_name: str,
+    project_domain: str | None,
+) -> list[str]:
+    normalized = _normalize_project_points(points)
+    if len(normalized) >= 3:
+        return normalized[:3]
+
+    domain_text = (project_domain or "target role").strip()
+    fallback_templates = [
+        f"Built {project_name} to address {domain_text} requirements.",
+        "Implemented scalable workflows and clear system integration boundaries.",
+        "Optimized reliability through iterative improvements and production-focused engineering practices.",
+    ]
+    for template in fallback_templates:
+        if len(normalized) >= 3:
+            break
+        normalized.extend(_normalize_project_points([template]))
+    return normalized[:3]
+
+
+def _project_points_from_entry(project: dict[str, Any]) -> list[str]:
+    points = _split_project_description_points(project.get("points"))
+    if points:
+        return points
+    return _split_project_description_points(project.get("description"))
+
+
+def _set_project_points_in_entry(project: dict[str, Any], points: list[str]) -> None:
+    normalized_points = _normalize_project_points(_split_project_description_points(points))
+    project["points"] = normalized_points
+    project.pop("description", None)
+
+
+def _coerce_tailored_resume_payload(
+    payload: dict[str, Any],
+    *,
+    profile_project_links: set[str] | None = None,
+) -> dict[str, Any]:
     """Map common model-output variants into the TailoredResume schema shape."""
     # Some models wrap the object under a top-level key.
     if "TailoredResume" in payload and isinstance(payload["TailoredResume"], dict):
@@ -318,20 +1222,40 @@ def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(project, dict):
                 continue
             p = dict(project)
+            if not p.get("project_summary"):
+                for summary_key in ("summary", "projectSummary", "short_summary"):
+                    if isinstance(p.get(summary_key), str) and p.get(summary_key).strip():
+                        p["project_summary"] = p.get(summary_key).strip()
+                        break
+            if not p.get("completion_time"):
+                for time_key in ("completed_at", "completion", "completion_date", "time"):
+                    if isinstance(p.get(time_key), str) and p.get(time_key).strip():
+                        p["completion_time"] = p.get(time_key).strip()
+                        break
             if not p.get("link") and isinstance(p.get("github"), str):
                 p["link"] = p["github"]
             if not p.get("link") and isinstance(p.get("url"), str):
                 p["link"] = p["url"]
-            link = p.get("link")
-            if (
-                isinstance(link, str)
-                and link
-                and not link.startswith(("http://", "https://"))
-            ):
-                p["link"] = f"https://{link}"
-            description = p.get("description")
-            if isinstance(description, str) and description.strip():
-                p["description"] = _strip_markdown_artifacts(description)
+            if isinstance(p.get("link"), str):
+                p["link"] = _ensure_url(p.get("link")) or ""
+            if profile_project_links is not None:
+                p["link"] = _link_allowed_for_profile(
+                    p.get("link"),
+                    profile_project_links,
+                ) or ""
+            normalized_points = _normalize_project_points(_project_points_from_entry(p))
+            if not normalized_points:
+                normalized_points = _ensure_project_point_count(
+                    [],
+                    project_name=str(p.get("name") or "Project").strip() or "Project",
+                    project_domain=(
+                        str(p.get("domain")).strip()
+                        if p.get("domain") is not None
+                        else None
+                    ),
+                )
+            p["points"] = normalized_points
+            p.pop("description", None)
             normalized_projects.append(p)
         payload["projects"] = normalized_projects or None
 
@@ -393,13 +1317,20 @@ def _coerce_tailored_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _normalize_tailored_resume_json(raw_text: str) -> str:
+def _normalize_tailored_resume_json(
+    raw_text: str,
+    *,
+    profile_project_links: set[str] | None = None,
+) -> str:
     """Normalize and validate model output as TailoredResume JSON."""
     json_text = _extract_json_object(raw_text)
     parsed = json.loads(json_text)
     if not isinstance(parsed, dict):
         raise ValueError("Model output must be a JSON object")
-    parsed = _coerce_tailored_resume_payload(parsed)
+    parsed = _coerce_tailored_resume_payload(
+        parsed,
+        profile_project_links=profile_project_links,
+    )
     validated = TailoredResume.model_validate(parsed)
 
     # Reject effectively-empty outputs so we never render near-blank pages.
@@ -415,6 +1346,522 @@ def _normalize_tailored_resume_json(raw_text: str) -> str:
         raise ValueError("Tailored resume payload is empty after normalization")
 
     return validated.model_dump_json()
+
+
+def _ensure_minimum_skills_in_resume_json(
+    current_json: str,
+    *,
+    skill_pool: list[str],
+    min_count: int,
+    max_count: int | None = None,
+    profile_project_links: set[str] | None = None,
+) -> str:
+    parsed = json.loads(current_json)
+    if not isinstance(parsed, dict):
+        raise ValueError("Resume JSON must be an object")
+    parsed = _coerce_tailored_resume_payload(
+        parsed,
+        profile_project_links=profile_project_links,
+    )
+    if parsed.get("skills") is None:
+        return TailoredResume.model_validate(parsed).model_dump_json()
+    parsed["skills"] = (
+        _ensure_minimum_skill_groups(
+            parsed.get("skills"),
+            skill_pool=skill_pool,
+            min_count=min_count,
+            max_count=max_count,
+        )
+        or None
+    )
+    return TailoredResume.model_validate(parsed).model_dump_json()
+
+
+def _prepare_resume_json_for_render(
+    current_json: str,
+    *,
+    args: argparse.Namespace,
+    jd: str,
+    skill_pool: list[str],
+    profile_project_links: set[str] | None,
+) -> str:
+    current_json = _apply_omission_flags_to_json(current_json, args=args, jd=jd)
+    if not args.no_skills:
+            current_json = _ensure_minimum_skills_in_resume_json(
+                current_json,
+                skill_pool=skill_pool,
+                min_count=TARGET_INDIVIDUAL_SKILLS,
+                max_count=TARGET_INDIVIDUAL_SKILLS,
+                profile_project_links=profile_project_links,
+            )
+    return current_json
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Orphan line detection & LLM re-prompting
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _match_orphan_to_resume_json(
+    orphan_text: str,
+    resume_data: dict[str, Any],
+) -> tuple[str, int, int] | None:
+    """Find the section/item/bullet index in resume_data matching orphan_text.
+
+    Compares the browser ``textContent`` (no markdown) against resume JSON
+    bullets with ``**`` bold markers stripped.
+
+    Returns (section_key, item_index, bullet_index) or None if not found.
+    section_key is one of 'projects', 'experience', 'activities'.
+    """
+    clean = lambda s: re.sub(r"\*\*", "", s).strip()  # noqa: E731
+    orphan_clean = clean(orphan_text)
+
+    for section_key, list_field, bullet_field in (
+        ("projects", "projects", "points"),
+        ("experience", "experience", "bullets"),
+        ("activities", "activities", "bullets"),
+    ):
+        items = resume_data.get(section_key) or []
+        for item_idx, item in enumerate(items):
+            bullets = item.get(bullet_field) or []
+            for bullet_idx, bullet in enumerate(bullets):
+                if clean(bullet) == orphan_clean:
+                    return section_key, item_idx, bullet_idx
+    return None
+
+
+def _build_orphan_fix_prompt(
+    orphan_data: list[dict[str, Any]],
+    resume_data: dict[str, Any],
+    job_analysis_json: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a single LLM prompt that fixes all orphan/oversize bullets.
+
+    Returns (prompt_text, mapping_list) where mapping_list tracks which
+    resume JSON location each bullet index in the prompt corresponds to.
+    """
+    mapping: list[dict[str, Any]] = []
+    bullet_blocks: list[str] = []
+
+    for idx, orphan in enumerate(orphan_data, start=1):
+        match = _match_orphan_to_resume_json(orphan["text"], resume_data)
+        if match is None:
+            _warn(f"Orphan fix: could not locate bullet in resume JSON — skipping: {orphan['text'][:60]}...")
+            continue
+
+        section_key, item_idx, bullet_idx = match
+        items = resume_data[section_key]
+        original_md = (items[item_idx].get("points") or items[item_idx].get("bullets"))[bullet_idx]
+
+        # Section context for the LLM
+        item = items[item_idx]
+        if section_key == "projects":
+            context = f"Project: \"{item.get('name', '')}\" — {item.get('project_summary', '')}"
+        elif section_key == "experience":
+            context = f"Experience: \"{item.get('role', '')}\" at {item.get('organization', '')}"
+        else:
+            context = f"Activities: \"{item.get('topic', '')}\""
+
+        fix_type = orphan["fix_type"]
+        chars_per_line = orphan["charsPerLine"]
+        target_min = orphan["targetCharsMin"]
+        target_max = orphan["targetCharsMax"]
+
+        # LLMs overcount characters by ~8-10% under strict formatting. Feed
+        # a slightly adjusted budget into the prompt so the actual output lands
+        # beautifully between 1.80 and 1.95 lines.
+        PROMPT_BUDGET = 0.92
+        prompt_tgt_min = int(target_min * PROMPT_BUDGET)
+        prompt_tgt_max = int(target_max * PROMPT_BUDGET)
+
+        if fix_type == "expand":
+            chars_to_add_min = max(0, prompt_tgt_min - orphan["currentChars"])
+            chars_to_add_max = max(0, prompt_tgt_max - orphan["currentChars"])
+            instruction = (
+                f"  FIX: EXPAND this bullet so it fills between 1.8 and 1.9 lines in the final PDF.\n"
+                f"  One rendered line = {chars_per_line} visible characters at current font size.\n"
+                f"  Currently renders as {orphan['renderedLines']} lines (orphan — second line nearly empty).\n"
+                f"  You need to ADD approximately {chars_to_add_min}-{chars_to_add_max} more visible characters.\n"
+                f"  Target total: {prompt_tgt_min}-{prompt_tgt_max} visible characters (excluding ** markers).\n"
+                f"  HARD MAX: {prompt_tgt_max} visible chars. Exceeding this = 3 lines = REJECTED."
+            )
+        else:
+            instruction = (
+                f"  FIX: SHORTEN this bullet to fit exactly 2 lines maximum (ideally filling 1.8 to 1.9 lines).\n"
+                f"  One rendered line = {chars_per_line} visible characters at current font size.\n"
+                f"  Currently renders as {orphan['renderedLines']} lines (too long).\n"
+                f"  Target total: {prompt_tgt_min}-{prompt_tgt_max} visible characters (excluding ** markers).\n"
+                f"  HARD MAX: {prompt_tgt_max} visible chars. Exceeding this = 3 lines = REJECTED."
+            )
+
+        block = (
+            f"Bullet {idx}:\n"
+            f"  {context}\n"
+            f"  Original: \"{original_md}\"\n"
+            f"  Current visible chars: {orphan['currentChars']}\n"
+            f"{instruction}"
+        )
+        bullet_blocks.append(block)
+        mapping.append({
+            "prompt_index": idx,
+            "section_key": section_key,
+            "item_idx": item_idx,
+            "bullet_idx": bullet_idx,
+            "original_md": original_md,
+            "fix_type": fix_type,
+            "target_min": target_min,
+            "target_max": target_max,
+        })
+
+    if not bullet_blocks:
+        return "", []
+
+    # Extract brief keywords from job analysis for context
+    try:
+        ja = json.loads(job_analysis_json)
+        keywords = ja.get("keywords", [])[:8]
+        required = ja.get("required_skills", [])[:6]
+        kw_text = ", ".join(keywords + required) if (keywords or required) else "N/A"
+    except Exception:
+        kw_text = "N/A"
+
+    prompt = (
+        "OUTPUT FORMAT — THIS IS MANDATORY:\n"
+        "You MUST respond with ONLY a raw JSON object. No explanation. No prose. No markdown fences.\n"
+        "Shape:\n"
+        "{\n"
+        '  "bullets": [\n'
+        '    {"index": 1, "replacement": "Rewritten bullet text here."},\n'
+        '    {"index": 2, "replacement": "..."}\n'
+        "  ]\n"
+        "}\n\n"
+        "TASK: Rewrite resume bullet points to fix PDF line-wrap issues.\n"
+        "Font: Computer Modern Serif (proportional). Exact character limits given per bullet.\n\n"
+        "RULES:\n"
+        "- Character counts are VISIBLE characters only. Markdown bold markers (**) do NOT count.\n"
+        "- Start every bullet with a strong action verb.\n"
+        "- Use **bold** to highlight key technologies, methodologies, and metrics.\n"
+        "- Add job-relevant technical detail when expanding (use keywords from the job).\n"
+        "- Keep the core meaning and factual claims of the original.\n"
+        "- Each rewritten bullet MUST stay within its target character range.\n"
+        "- No bullet may EVER exceed 2 rendered lines. Respect the HARD MAX.\n"
+        "- No emojis.\n\n"
+        f"Job-relevant keywords: {kw_text}\n\n"
+        + "\n\n".join(bullet_blocks)
+        + "\n\n"
+        "Respond with ONLY the JSON object shown above. Nothing else."
+    )
+    return prompt, mapping
+
+
+def _repair_json_string(raw: str) -> str:
+    """Best-effort repair of common LLM JSON mistakes."""
+    # Remove markdown fences if present
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw.strip())
+    # Remove JS style single-line comments on their own line
+    raw = re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE)
+    # Remove JS style block comments
+    raw = re.sub(r"/\*.*?\*/", "", raw, flags=re.DOTALL)
+    # Strip trailing commas before ] or }
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+    # Replace smart quotes with straight quotes
+    raw = raw.replace("\u201c", '"').replace("\u201d", '"')
+    raw = raw.replace("\u2018", "'").replace("\u2019", "'")
+    # Replace single quotes with double quotes for keys and string values
+    raw = re.sub(r"'(\w+)'\s*:", r'"\1":', raw)
+    raw = re.sub(r":\s*'([^']*)'", r': "\1"', raw)
+    # Escape unescaped newlines inside string values
+    # (match content between quotes, replace literal newlines)
+    def _fix_newlines(m: re.Match) -> str:
+        return m.group(0).replace("\n", "\\n")
+    raw = re.sub(r'"(?:[^"\\]|\\.)*"', _fix_newlines, raw, flags=re.DOTALL)
+    return raw
+
+
+def _fix_orphan_bullets(
+    orphan_data: list[dict[str, Any]],
+    resume_json: str,
+    job_analysis_json: str,
+) -> tuple[str, int]:
+    """Call the LLM to fix orphan/oversize bullets and return updated resume JSON.
+
+    Makes a direct litellm.completion() call (no CrewAI overhead).
+
+    Returns (updated_json, applied_count).
+    """
+    import litellm
+
+    resume_data = json.loads(resume_json)
+    prompt, mapping = _build_orphan_fix_prompt(orphan_data, resume_data, job_analysis_json)
+
+    if not prompt or not mapping:
+        _info("Orphan fix: no fixable bullets found.")
+        return resume_json, 0
+
+    _info(f"Orphan fix: requesting LLM rewrite for {len(mapping)} bullet(s)...")
+
+    # Resolve model from crew.py's runtime config
+    from src.resumer.crew import resolve_llm_runtime, _normalize_anthropic_base_url
+    model, key_env, api_key = resolve_llm_runtime()
+    _raw_api_base = (os.environ.get("RESUMER_API_BASE") or "").strip()
+    _api_base = _normalize_anthropic_base_url(model, _raw_api_base) if _raw_api_base else ""
+
+    system_msg = (
+        "You are a precise resume editor. You ONLY output valid JSON. "
+        "No explanation, no markdown fences, no trailing commas. "
+        "Every string value must be on a single line (no literal newlines inside strings)."
+    )
+
+    raw_text = ""
+    rate_limit_delays = [5, 15, 60]  # seconds — retry backoff for 429s
+
+    def _is_rate_limit(exc: Exception) -> bool:
+        exc_str = str(exc).lower()
+        return "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str
+
+    def _llm_call(*, use_response_format: bool, override_prompt: str | None = None) -> str:
+        kwargs: dict[str, Any] = dict(
+            model=model,
+            api_key=api_key,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": override_prompt if override_prompt is not None else prompt},
+            ],
+            temperature=0.5,
+            max_tokens=4000,
+        )
+        if _api_base:
+            kwargs["base_url"] = _api_base
+        if use_response_format:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = litellm.completion(**kwargs)
+        return resp.choices[0].message.content.strip()
+
+    # Try calling with response_format={"type": "json_object"} first,
+    # with automatic retries on rate-limit (429) errors.
+    for attempt_idx in range(len(rate_limit_delays) + 1):
+        try:
+            raw_text = _llm_call(use_response_format=True)
+            break  # success
+        except Exception as exc:
+            if _is_rate_limit(exc):
+                if attempt_idx < len(rate_limit_delays):
+                    delay = rate_limit_delays[attempt_idx]
+                    _warn(f"Rate limited — waiting {delay}s before retry {attempt_idx + 1}/{len(rate_limit_delays)}...")
+                    time.sleep(delay)
+                    continue
+                _err(f"Orphan fix LLM call failed after {len(rate_limit_delays)} retries: {exc}")
+                return resume_json, 0
+
+            # Fallback if response_format is not supported by provider/model
+            if "response_format" in str(exc) or "format" in str(exc).lower():
+                for fb_idx in range(len(rate_limit_delays) + 1):
+                    try:
+                        raw_text = _llm_call(use_response_format=False)
+                        break
+                    except Exception as fallback_exc:
+                        if _is_rate_limit(fallback_exc) and fb_idx < len(rate_limit_delays):
+                            delay = rate_limit_delays[fb_idx]
+                            _warn(f"Rate limited (fallback) — waiting {delay}s before retry {fb_idx + 1}/{len(rate_limit_delays)}...")
+                            time.sleep(delay)
+                            continue
+                        _err(f"Orphan fix LLM call failed on fallback: {fallback_exc}")
+                        return resume_json, 0
+                break  # got fallback result
+            else:
+                _err(f"Orphan fix LLM call failed: {exc}")
+                return resume_json, 0
+
+    # Parse response JSON — try raw first, then repaired
+    replacements: list[dict] = []
+    for attempt_label, text in (("raw", raw_text), ("repaired", _repair_json_string(raw_text))):
+        try:
+            extracted = _extract_json_object(text)
+            result = json.loads(extracted)
+            replacements = result.get("bullets", [])
+            if replacements:
+                break
+        except Exception:
+            continue
+
+    # Prose / thinking-model fallback: model returned plain text instead of JSON.
+    if not replacements and raw_text.strip() and "{" not in raw_text:
+        _warn("Orphan fix: no JSON in response — attempting prose fallback.")
+
+        def _extract_bullet_from_prose(text: str) -> str:
+            """Extract a clean bullet string from various non-JSON response formats."""
+            # Strategy 1: thinking-model scratchpad — backtick fragments with char counts.
+            # Pattern: `fragment` (N) repeated, joined = full bullet.
+            # e.g. `HackNight 2024` (14) *   ` and conducted` (14) ...
+            backtick_fragments = re.findall(r"`([^`]+)`", text)
+            if backtick_fragments:
+                candidate = "".join(backtick_fragments).strip()
+                # Sanity: must look like a real sentence (> 20 chars, starts with capital/verb)
+                if len(candidate) > 20:
+                    return candidate
+
+            # Strategy 2: single clean line that starts with a capital letter / action verb
+            # (plain prose response, no CoT)
+            cot_pattern = re.compile(
+                r"(let'?s\s|length\s*:|range\s*:|total\s*:|let me|i'll |i will |"
+                r"here'?s |count|perfect|great|note:|tip:|\bcheck\b|\bstep\b)",
+                re.IGNORECASE,
+            )
+            candidate_lines = [
+                ln.strip()
+                for ln in text.splitlines()
+                if ln.strip() and not cot_pattern.search(ln) and len(ln.strip()) > 20
+            ]
+            if candidate_lines:
+                # Prefer lines that start with an uppercase letter (likely the bullet)
+                for ln in candidate_lines:
+                    if ln[0].isupper() and not ln.startswith("Bullet"):
+                        return ln
+
+            return ""
+
+        if len(mapping) == 1:
+            bullet_text = _extract_bullet_from_prose(raw_text)
+            if bullet_text:
+                replacements = [{"index": mapping[0]["prompt_index"], "replacement": bullet_text}]
+                _warn(f"Orphan fix prose fallback (single bullet): {bullet_text[:80]}...")
+        else:
+            # Multiple bullets — try splitting on "Bullet N:" markers first
+            split_pattern = re.compile(r"Bullet\s+(\d+)\s*[:\-]", re.IGNORECASE)
+            parts = split_pattern.split(raw_text)
+            if len(parts) >= 3:
+                i = 1
+                while i + 1 < len(parts):
+                    try:
+                        bullet_idx = int(parts[i])
+                        bullet_text = _extract_bullet_from_prose(parts[i + 1])
+                        if bullet_text:
+                            replacements.append({"index": bullet_idx, "replacement": bullet_text})
+                    except (ValueError, IndexError):
+                        pass
+                    i += 2
+
+    # One-at-a-time fallback: if multi-bullet batch still produced nothing
+    # (thinking model scratchpad too tangled to parse), retry each bullet individually.
+    if not replacements and len(mapping) > 1:
+        _warn("Orphan fix: batch parse failed — retrying one bullet at a time.")
+        for entry in mapping:
+            # Find the original orphan dict that corresponds to this mapping entry
+            single_orphan = next(
+                (
+                    o for o in orphan_data
+                    if _match_orphan_to_resume_json(o["text"], resume_data)
+                    == (entry["section_key"], entry["item_idx"], entry["bullet_idx"])
+                ),
+                None,
+            )
+            if single_orphan is None:
+                continue
+            single_prompt, _ = _build_orphan_fix_prompt([single_orphan], resume_data, job_analysis_json)
+            if not single_prompt:
+                continue
+            try:
+                single_raw = _llm_call(use_response_format=False, override_prompt=single_prompt)
+                # Parse result
+                single_repl: list[dict] = []
+                for _, text in (("raw", single_raw), ("repaired", _repair_json_string(single_raw))):
+                    try:
+                        extracted = _extract_json_object(text)
+                        result2 = json.loads(extracted)
+                        single_repl = result2.get("bullets", [])
+                        if single_repl:
+                            break
+                    except Exception:
+                        continue
+                if not single_repl and "{" not in single_raw:
+                    bullet_text = _extract_bullet_from_prose(single_raw)
+                    if bullet_text:
+                        single_repl = [{"index": 1, "replacement": bullet_text}]
+                if single_repl:
+                    replacements.append({
+                        "index": entry["prompt_index"],
+                        "replacement": single_repl[0].get("replacement", ""),
+                    })
+            except Exception as exc:
+                _warn(f"Orphan fix single-bullet call failed for index {entry['prompt_index']}: {exc}")
+
+    # Log direct LLM call to conversation trace
+    try:
+        _append_model_trace_entry(
+            label="Orphan and oversize bullet fix",
+            crew_method_name="orphan_fix_direct_call",
+            attempt=1,
+            attempts=1,
+            inputs={"prompt": prompt, "system_message": system_msg},
+            output_text=raw_text,
+            error_text="" if replacements else "Failed to parse replacements. Raw response printed below.",
+        )
+    except Exception as exc:
+        _warn(f"Orphan fix trace logging failed: {exc}")
+
+    if not replacements:
+        _err("Orphan fix: could not parse LLM response after repair attempts")
+        _err(f"Raw LLM Response was:\n{raw_text}")
+        return resume_json, 0
+
+    # Apply replacements to resume data
+    applied = 0
+    for repl in replacements:
+        idx = repl.get("index")
+        new_text = repl.get("replacement", "").strip()
+        if not idx or not new_text:
+            continue
+
+        # Find the mapping entry for this index
+        entry = next((m for m in mapping if m["prompt_index"] == idx), None)
+        if entry is None:
+            continue
+
+        # Validate character count (visible chars, excluding **)
+        visible_len = len(re.sub(r"\*\*", "", new_text))
+        if visible_len > entry["target_max"] * 1.05:
+            _warn(
+                f"Orphan fix: bullet {idx} too long ({visible_len} > {entry['target_max']}), skipping"
+            )
+            continue
+
+        section_key = entry["section_key"]
+        item_idx = entry["item_idx"]
+        bullet_idx = entry["bullet_idx"]
+
+        items = resume_data[section_key]
+        bullet_field = "points" if section_key == "projects" else "bullets"
+        items[item_idx][bullet_field][bullet_idx] = new_text
+        applied += 1
+
+    if applied > 0:
+        _ok(f"Orphan fix: applied {applied}/{len(mapping)} bullet replacement(s)")
+    else:
+        _warn("Orphan fix: no replacements applied")
+
+    return json.dumps(resume_data, ensure_ascii=False, indent=2), applied
+
+
+def _compile_resume_candidate(
+    *,
+    resume_json: str,
+    iteration: int,
+    compile_pdf: Any,
+    output_dir: Path,
+    get_page_count: Any,
+    get_overflow_lines: Any,
+    shared_state: dict[str, Any],
+) -> tuple[Path, int, int, int]:
+    compile_pdf.func(resume_json, str(iteration))
+    pdf_path = output_dir / f"draft_v{iteration}.pdf"
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF missing: {pdf_path}")
+    pages = get_page_count(pdf_path)
+    overflow_lines = get_overflow_lines(pdf_path)
+    content_height = int(shared_state.get("last_content_height", 0) or 0)
+    return pdf_path, pages, overflow_lines, content_height
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -437,12 +1884,6 @@ def main() -> None:
         help="Path to master profile JSON",
     )
     parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=MAX_SHORTENING_ITERATIONS,
-        help=f"Max feedback-loop iterations (hard cap: {MAX_SHORTENING_ITERATIONS})",
-    )
-    parser.add_argument(
         "--job-label",
         default="",
         help="Optional non-interactive output folder label (skips terminal prompt)",
@@ -456,6 +1897,11 @@ def main() -> None:
         "--api-key-env",
         default="",
         help="Environment variable name that stores the API key for the selected model",
+    )
+    parser.add_argument(
+        "--api-base",
+        default="",
+        help="Optional base URL for OpenAI/Anthropic-compatible endpoints",
     )
     parser.add_argument(
         "--no-objective", action="store_true", help="Omit the objective section"
@@ -489,32 +1935,47 @@ def main() -> None:
         default=[],
         help="List of words that MUST be included word-for-word",
     )
+    parser.add_argument(
+        "--agent-instructions",
+        default="",
+        help="Extra instructions to pass directly to the model agents",
+    )
+    parser.add_argument(
+        "--template-path",
+        default="",
+        help="Optional Jinja2 template path for this run",
+    )
+    parser.add_argument(
+        "--css-path",
+        default="",
+        help="Optional custom CSS path for this run",
+    )
     args = parser.parse_args()
-    requested_max_iterations = args.max_iterations
-    args.max_iterations = _sanitize_max_iterations(args.max_iterations)
-    if requested_max_iterations != args.max_iterations:
-        _warn(
-            f"Requested max iterations ({requested_max_iterations}) exceeded the cap. Using {args.max_iterations}."
-        )
 
     if args.model.strip():
         os.environ["RESUMER_MODEL"] = args.model.strip()
     if args.api_key_env.strip():
         os.environ["RESUMER_API_KEY_ENV"] = args.api_key_env.strip()
+    if args.api_base.strip():
+        os.environ["RESUMER_API_BASE"] = args.api_base.strip()
 
     # Import crew after model env is configured so runtime model selection takes effect.
-    from src.resumer.crew import ResumerCrew, resolve_llm_runtime  # noqa: E402
+    from src.resumer.crew import resolve_llm_runtime  # noqa: E402
 
     selected_model, selected_key_env, api_key = resolve_llm_runtime()
 
     jd_path = BASE_DIR / args.jd
     data_path = BASE_DIR / args.data
     template_css = BASE_DIR / "template" / "template.css"
+    template_path = BASE_DIR / args.template_path if args.template_path.strip() else None
 
     _banner("🤖  Resume Agent v3 — CrewAI")
 
     # ── Validate inputs ──────────────────────────────────────────────────
-    for p in [jd_path, data_path, template_css]:
+    required_paths = [jd_path, data_path, template_css]
+    if template_path is not None:
+        required_paths.append(template_path)
+    for p in required_paths:
         if not p.exists():
             _err(f"File not found: {p}")
             sys.exit(1)
@@ -525,10 +1986,13 @@ def main() -> None:
         )
         sys.exit(1)
     _info(f"Model: {selected_model}")
+    if os.environ.get("RESUMER_API_BASE", "").strip():
+        _info(f"API Base: {os.environ['RESUMER_API_BASE'].strip()}")
 
     # ── Load data ────────────────────────────────────────────────────────
     _step(1, "Loading inputs…")
     profile = json.loads(data_path.read_text(encoding="utf-8"))
+    profile_project_links = _collect_profile_project_links(profile)
     jd = jd_path.read_text(encoding="utf-8").strip()
     _info(f"Profile: {profile.get('personal_information', {}).get('name', '—')}")
     _info(f"Job description: {len(jd):,} chars")
@@ -563,24 +2027,35 @@ def main() -> None:
         sys.exit(1)
 
     _info(f"Output folder: {output_dir}")
+    _init_model_trace_artifact(
+        output_dir=output_dir,
+        model=selected_model,
+        job_label=job_label,
+        profile_name=str(profile.get("personal_information", {}).get("name", "—")),
+        job_description=jd,
+    )
 
     # ── Inject shared state for tools ────────────────────────────────────
-    set_shared_state(profile=profile, output_dir=str(output_dir))
+    set_shared_state(
+        profile=profile,
+        output_dir=str(output_dir),
+        template_path=str(template_path) if template_path is not None else "",
+        css_path=args.css_path,
+    )
 
-    # ── Kickoff CrewAI — iteration loop ──────────────────────────────────
-    _step(3, "Launching CrewAI / Python Middle-Man loop…")
+    # ── Kickoff CrewAI — staged generation loop ─────────────────────────
+    _step(3, "Launching staged CrewAI resume pipeline…")
 
     from src.resumer.tools.pdf_tools import (
         compile_pdf,
         _get_page_count,
-        _get_overflow_lines,
     )
 
     from src.resumer.tools.pdf_tools import _shared_state
 
     MAX_RUN_ATTEMPTS = 3
     final_success = False
-    overflow_limit_reached = False
+    attempt_feedback = "None"
 
     for run_attempt in range(1, MAX_RUN_ATTEMPTS + 1):
         if run_attempt > 1:
@@ -588,128 +2063,221 @@ def main() -> None:
                 f"Restarting generation from scratch (Attempt {run_attempt}/{MAX_RUN_ATTEMPTS})..."
             )
 
-        crew_instance = ResumerCrew()
         current_json = ""
-        overflow_lines = 0
+        skill_pool: list[str] = []
 
-        for iteration in range(1, args.max_iterations + 1):
-            _info(f"Draft iteration {iteration}/{args.max_iterations}…")
-
-            if iteration == 1:
-                inputs = {
-                    "profile_json": json.dumps(profile, indent=2),
+        try:
+            analysis_result = _kickoff_with_retries(
+                crew_method_name="job_analysis_crew",
+                inputs={
                     "job_description": jd,
-                    "output_dir": str(output_dir),
-                    "iteration": str(iteration),
-                    "mandatory_words": ", ".join(args.mandatory_words) if args.mandatory_words else "None",
-                }
-                result = crew_instance.writing_crew().kickoff(inputs=inputs)
-            else:
-                inputs = {
-                    "job_description": jd,
-                    "output_dir": str(output_dir),
-                    "iteration": str(iteration),
-                    "overflow_lines": str(overflow_lines),
-                    "previous_json": current_json,
-                }
-                result = crew_instance.shortening_crew().kickoff(inputs=inputs)
-
-            # Extract structured output and validate against the resume schema.
-            task_output = (
-                result.tasks_output[-1]
-                if hasattr(result, "tasks_output") and result.tasks_output
-                else None
+                    "agent_instructions": args.agent_instructions.strip() or "None",
+                },
+                label="Job analysis agent",
             )
-            if (
-                task_output
-                and hasattr(task_output, "pydantic")
-                and task_output.pydantic
-            ):
-                current_json = task_output.pydantic.model_dump_json()
-            else:
-                raw_out = ""
-                if task_output:
-                    raw_out = (getattr(task_output, "raw", "") or "").strip()
-                if not raw_out:
-                    raw_out = (getattr(result, "raw", "") or "").strip()
-                if not raw_out:
-                    raw_out = str(result).strip()
+            job_analysis = _parse_model_json(
+                _result_to_raw_text(analysis_result), JobAnalysis
+            )
+            job_analysis = _merge_mandatory_words(job_analysis, args.mandatory_words)
+            if not job_analysis.applying_for:
+                job_analysis.applying_for = _infer_applying_for_from_jd(jd)
+            skill_pool = _build_skill_pool(profile, job_analysis)
 
-                try:
-                    current_json = _normalize_tailored_resume_json(raw_out)
-                except Exception as e:
-                    _err(f"Could not parse/validate resume JSON from model output: {e}")
-                    preview = raw_out[:300].replace("\n", " ")
-                    if preview:
-                        _warn(f"Model output preview: {preview}")
-                    break
+            job_analysis_json = job_analysis.model_dump_json(indent=2)
+            (output_dir / "job_analysis.json").write_text(
+                job_analysis_json, encoding="utf-8"
+            )
+            mandatory_words_text = (
+                ", ".join(args.mandatory_words) if args.mandatory_words else "None"
+            )
+            agent_instructions_text = args.agent_instructions.strip() or "None"
+            profile_json = json.dumps(profile, ensure_ascii=False, indent=2)
 
-            # ── Apply CLI omission flags BEFORE PDF compilation ────────────
-            try:
-                temp_data = json.loads(current_json)
-                if not args.no_applying_for and not temp_data.get("applying_for"):
-                    inferred_role = _infer_applying_for_from_jd(jd)
-                    if inferred_role:
-                        temp_data["applying_for"] = inferred_role
-                if args.no_objective:
-                    temp_data["objective"] = None
-                if args.no_skills:
-                    temp_data["skills"] = None
-                if args.no_projects:
-                    temp_data["projects"] = None
-                if args.no_experience:
-                    temp_data["experience"] = None
-                if args.no_activities:
-                    temp_data["activities"] = None
-                if args.no_applying_for:
-                    temp_data["applying_for"] = None
-                current_json = json.dumps(temp_data, indent=2)
-            except Exception as e:
-                _warn(f"Failed to apply omission flags: {e}")
-
-            # ── Deterministic PDF compilation & check ──────────────────────
-            compile_pdf.func(current_json, str(iteration))
-            pdf_path = output_dir / f"draft_v{iteration}.pdf"
-
-            if not pdf_path.exists():
-                _err(f"PDF missing: {pdf_path}")
-                break
-
-            pages = _get_page_count(pdf_path)
-            overflow_lines = _get_overflow_lines(pdf_path)
-
-            if pages == 1:
-                content_height = _shared_state.get("last_content_height", 0)
-                if content_height > 0 and content_height < 900:
-                    _warn(
-                        f"Iteration {iteration}: UNDERFLOW (Content height: {content_height}px / ~1122px). Too much empty space."
-                    )
-                    _warn("Discarding this run and restarting completely...")
-                    break
-                final_success = True
-                _ok(
-                    f"Iteration {iteration}: Resume fits perfectly on 1 page! ✅ (Content height: {content_height}px)"
+            summary_result, projects_result, experience_result = asyncio.run(
+                _run_summary_projects_and_experience(
+                    job_analysis_json=job_analysis_json,
+                    truth_skills_json=_profile_skills_json(profile),
+                    profile_json=profile_json,
+                    mandatory_words_text=mandatory_words_text,
+                    agent_instructions_text=agent_instructions_text,
+                    attempt_feedback=attempt_feedback,
                 )
+            )
+            summary_skills = _parse_model_json(
+                _result_to_raw_text(summary_result), SummarySkillsDraft
+            )
+
+            for repair_attempt in range(1, 3):
+                missing_required = _missing_required_terms(
+                    summary_skills, job_analysis.required_skills
+                )
+                if not missing_required:
+                    break
+                repair_feedback = (
+                    "Repair required. Add these required skills exactly in the "
+                    f"professional summary or skills section: {', '.join(missing_required)}"
+                )
+                _warn(repair_feedback)
+                repair_result = _kickoff_with_retries(
+                    crew_method_name="summary_skills_crew",
+                    inputs={
+                        "job_analysis_json": job_analysis_json,
+                        "profile_json": profile_json,
+                        "truth_skills_json": _profile_skills_json(profile),
+                        "mandatory_words": mandatory_words_text,
+                        "agent_instructions": agent_instructions_text,
+                        "attempt_feedback": repair_feedback,
+                    },
+                    label=f"Summary and skills repair {repair_attempt}",
+                )
+                summary_skills = _parse_model_json(
+                    _result_to_raw_text(repair_result), SummarySkillsDraft
+                )
+
+            missing_required = _missing_required_terms(
+                summary_skills, job_analysis.required_skills
+            )
+            if missing_required:
+                raise ValueError(
+                    "Summary/skills still missing required skills: "
+                    + ", ".join(missing_required)
+                )
+            summary_skills = _ensure_minimum_summary_skills(
+                summary_skills,
+                skill_pool=skill_pool,
+                min_count=TARGET_INDIVIDUAL_SKILLS,
+                max_count=TARGET_INDIVIDUAL_SKILLS,
+            )
+            if _count_individual_skill_items(summary_skills.skills) != TARGET_INDIVIDUAL_SKILLS:
+                raise ValueError(
+                    f"Summary/skills must contain exactly {TARGET_INDIVIDUAL_SKILLS} unique skills."
+                )
+
+            projects_draft = _parse_model_json(
+                _result_to_raw_text(projects_result), ProjectsDraft
+            )
+            experience_draft = _parse_model_json(
+                _result_to_raw_text(experience_result), ExperienceDraft
+            )
+            current_json = _assemble_tailored_resume(
+                job_analysis=job_analysis,
+                summary_skills=summary_skills,
+                projects_draft=projects_draft,
+                experience_draft=experience_draft,
+                profile_project_links=profile_project_links,
+            )
+        except Exception as exc:
+            _err(f"Staged generation failed on attempt {run_attempt}: {exc}")
+            attempt_feedback = (
+                "Previous attempt failed during staged generation. Produce stricter "
+                "valid JSON and keep all required skills visible."
+            )
+            # Escalating backoff before next full attempt when rate-limited
+            exc_str = str(exc).lower()
+            if "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str:
+                rl_delay = [15, 30, 60][min(run_attempt - 1, 2)]
+                _warn(f"Rate limited — waiting {rl_delay}s before next full attempt...")
+                time.sleep(rl_delay)
+            continue
+
+        draft_iteration = 1
+        try:
+            current_json = _prepare_resume_json_for_render(
+                current_json,
+                args=args,
+                jd=jd,
+                skill_pool=skill_pool,
+                profile_project_links=profile_project_links,
+            )
+            _, pages, overflow_lines, content_height = _compile_resume_candidate(
+                resume_json=current_json,
+                iteration=draft_iteration,
+                compile_pdf=compile_pdf,
+                output_dir=output_dir,
+                get_page_count=_get_page_count,
+                get_overflow_lines=lambda _: 0,  # auto-fit handles fitting
+                shared_state=_shared_state,
+            )
+        except Exception as e:
+            _err(f"Could not compile resume draft: {e}")
+            continue
+
+        # Auto-fit in makepdf.py handles page fitting via font-size/line-height
+        # binary search. Check for underflow (too little content).
+        if content_height > 0 and content_height < 900:
+            _warn(
+                f"Draft {draft_iteration}: UNDERFLOW (Content height: {content_height}px / ~1109px). Too much empty space."
+            )
+            if run_attempt < MAX_RUN_ATTEMPTS:
+                attempt_feedback = (
+                    "Previous attempt underfilled the page. Add richer, "
+                    "job-relevant detail across project descriptions, work "
+                    "experience bullets, and the summary while keeping one-page fit."
+                )
+                _warn("Discarding this run and restarting with enrichment feedback...")
+                continue
+            else:
+                _warn("Underfilled page on final attempt. Accepting as fallback to ensure resume is generated.")
+
+        # ── Orphan line fix: detect and re-prompt ────────────────────────
+        MAX_ORPHAN_PASSES = 2
+        for orphan_pass in range(1, MAX_ORPHAN_PASSES + 1):
+            orphan_data = _shared_state.get("last_orphan_data") or []
+            if not orphan_data:
+                break  # no orphans — done
+
+            _info(
+                f"Orphan fix pass {orphan_pass}/{MAX_ORPHAN_PASSES}: "
+                f"fixing {len(orphan_data)} bullet(s)..."
+            )
+            try:
+                current_json, applied_count = _fix_orphan_bullets(
+                    orphan_data=orphan_data,
+                    resume_json=current_json,
+                    job_analysis_json=job_analysis_json,
+                )
+                if applied_count == 0:
+                    _info("Orphan fix: nothing changed, skipping re-compile.")
+                    break
+                # Re-compile with fixed bullets
+                draft_iteration += 1
+                current_json = _prepare_resume_json_for_render(
+                    current_json,
+                    args=args,
+                    jd=jd,
+                    skill_pool=skill_pool,
+                    profile_project_links=profile_project_links,
+                )
+                _, pages, overflow_lines, content_height = _compile_resume_candidate(
+                    resume_json=current_json,
+                    iteration=draft_iteration,
+                    compile_pdf=compile_pdf,
+                    output_dir=output_dir,
+                    get_page_count=_get_page_count,
+                    get_overflow_lines=lambda _: 0,
+                    shared_state=_shared_state,
+                )
+                _ok(
+                    f"Orphan fix pass {orphan_pass}: re-compiled. "
+                    f"Content height: {content_height}px"
+                )
+            except Exception as exc:
+                _warn(f"Orphan fix pass {orphan_pass} failed: {exc}")
                 break
 
-            _warn(
-                f"Iteration {iteration}: OVERFLOW ({overflow_lines} rendered lines). Content height: {_shared_state.get('last_content_height', '?')}px"
-            )
-
-        else:
-            _warn(
-                f"Reached max iterations ({args.max_iterations}) without fitting on 1 page."
-            )
-            overflow_limit_reached = True
-
-        if final_success:
-            break
-        if overflow_limit_reached:
-            break
+        final_success = True
+        _ok(
+            f"Draft {draft_iteration}: Resume auto-fitted to 1 page. Content height: {content_height}px"
+        )
+        break
 
     # ── Post-process result ──────────────────────────────────────────────
     _step(4, "Wrapping up…")
-    pdf_candidates = sorted(output_dir.glob("draft_v*.pdf"))
+    pdf_candidates = sorted(
+        output_dir.glob("draft_v*.pdf"),
+        key=lambda x: int(x.stem[7:]) if x.stem.startswith("draft_v") and x.stem[7:].isdigit() else 0
+    )
+    produced_final = False
 
     # ── Find and copy final PDF ──────────────────────────────────────────
     if final_success:
@@ -718,12 +2286,20 @@ def main() -> None:
             page_count = len(PdfReader(str(best_pdf)).pages)
 
             if page_count == 1:
-                _ok("Final resume is exactly 1 page! 🎉")
+                _ok("Final resume is exactly 1 page!")
             else:
-                _warn(f"Best draft is {page_count} page(s).")
+                _warn(f"Best draft is {page_count} page(s). Keeping only page 1.")
+                # Crop to first page as edge-case fallback
+                writer = PdfWriter()
+                writer.add_page(PdfReader(str(best_pdf)).pages[0])
+                cropped = output_dir / "draft_v1_cropped.pdf"
+                with cropped.open("wb") as fh:
+                    writer.write(fh)
+                best_pdf = cropped
 
             final = output_dir / "final_resume.pdf"
             shutil.copy2(best_pdf, final)
+            produced_final = True
             _ok(f"Final resume → {final.resolve()}")
 
             best_md = best_pdf.with_suffix(".md")
@@ -732,34 +2308,17 @@ def main() -> None:
         else:
             _warn("No PDF drafts found in output folder.")
             _warn("The crew may not have used the compile_pdf tool.")
-    elif overflow_limit_reached and pdf_candidates:
-        best_pdf = pdf_candidates[-1]
-        page_count = len(PdfReader(str(best_pdf)).pages)
-        final = output_dir / "final_resume.pdf"
-
-        if page_count > 1:
-            _warn(
-                f"Still {page_count} pages after {args.max_iterations} iterations. Keeping only page 1 in final output."
-            )
-            _write_single_page_pdf(best_pdf, final)
-            _ok(f"Final resume (first page only) → {final.resolve()}")
-        else:
-            shutil.copy2(best_pdf, final)
-            _ok(f"Final resume → {final.resolve()}")
-
-        best_md = best_pdf.with_suffix(".md")
-        if best_md.exists():
-            shutil.copy2(best_md, output_dir / "final_resume.md")
-    elif not final_success:
+    else:
         _err(
-            f"All {MAX_RUN_ATTEMPTS} attempts produced underflow or failed to fit on 1 page."
-        )
-        _err(
-            "No final resume was produced. Try adjusting the job description or profile data."
+            f"All {MAX_RUN_ATTEMPTS} attempts failed to produce a resume."
         )
 
     print()
-    _ok("Done!")
+    if produced_final:
+        _ok("Done!")
+    else:
+        _err("Done without a final resume.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import functools
 import html
 import json
@@ -8,7 +9,6 @@ import socket
 import sys
 import threading
 import time
-import difflib
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 import streamlit as st
 from dotenv import load_dotenv
+
 try:
     from streamlit_ace import st_ace
 except Exception:  # pragma: no cover - graceful fallback
@@ -43,9 +44,14 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
     "Gemini 3 Flash": ("gemini/gemini-3-flash-preview", "GEMINI_KEY"),
     "Gemini 3.1 Flash lite": ("gemini/gemini-3.1-flash-lite-preview", "GEMINI_KEY"),
     "Gemma 4 31B": ("gemini/gemma-4-31b-it", "GEMINI_KEY"),
+    "GPT OSS 120B": ("groq/qwen/qwen3-32b", "GROQ_API_KEY"),
     "OpenRouter Mistral Large": (
         "openrouter/mistralai/mistral-large-latest",
         "OPENROUTER_API_KEY",
+    ),
+    "Kimi K2.6 (Cloudflare)": (
+        "cloudflare/@cf/moonshotai/kimi-k2.6",
+        "CLOUDFLARE_AUTH_TOKEN",
     ),
     "Custom": ("", ""),
 }
@@ -544,7 +550,9 @@ def _truth_structure_warnings(payload: dict[str, Any]) -> list[str]:
         for key in required_personal:
             value = personal.get(key)
             if not isinstance(value, str) or not value.strip():
-                warnings.append(f"'personal_information.{key}' should be a non-empty string.")
+                warnings.append(
+                    f"'personal_information.{key}' should be a non-empty string."
+                )
 
     photo = payload.get("photo")
     if photo is not None:
@@ -944,18 +952,21 @@ def _render_controls_panel(
             preset_model, preset_key_env = MODEL_PRESETS[preset]
             custom_model = ""
             custom_key_env = ""
+            custom_api_base = ""
             if preset == "Custom":
                 custom_model = st.text_input(
-                    "Custom Model ID", value="mistral/mistral-large-latest"
+                    "Custom Model ID", value="anthropic/gemini-3.5-flash-low"
                 )
                 custom_key_env = st.text_input(
-                    "API Key Env Variable", value="MISTRAL_API_KEY"
+                    "API Key Env Variable", value="OPENAI_API_KEY"
                 )
+                custom_api_base = st.text_input("API Base URL (optional)", value="")
 
             final_model = custom_model.strip() if preset == "Custom" else preset_model
             final_key_env = (
                 custom_key_env.strip() if preset == "Custom" else preset_key_env
             )
+            final_api_base = custom_api_base.strip() if preset == "Custom" else ""
 
             with st.expander("Optional Section Visibility", expanded=False):
                 c1, c2 = st.columns(2)
@@ -1011,6 +1022,7 @@ def _render_controls_panel(
                         job_label=local_run_label,
                         model=final_model,
                         api_key_env=final_key_env,
+                        api_base=final_api_base,
                         omissions=omissions,
                         project_id=project_id,
                         project_name=run_name,
@@ -1028,6 +1040,7 @@ def _render_controls_panel(
             except Exception as exc:
                 st.error(f"Could not start run: {exc}")
 
+
 def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
     editor_key = f"profile_editor_{uid}"
     editor_buffer_key = f"profile_editor_buffer_{uid}"
@@ -1042,7 +1055,9 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
     def _set_editor_content(new_text: str, *, mark_saved: bool = False) -> None:
         st.session_state[editor_buffer_key] = new_text
         st.session_state[editor_key] = new_text
-        st.session_state[ace_version_key] = int(st.session_state.get(ace_version_key, 0)) + 1
+        st.session_state[ace_version_key] = (
+            int(st.session_state.get(ace_version_key, 0)) + 1
+        )
         if mark_saved:
             st.session_state[saved_snapshot_key] = new_text
             st.session_state[save_confirm_key] = False
@@ -1059,23 +1074,33 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
         action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
         with action_col1:
             refresh_clicked = st.button(
-                "Reload from Local DB", key=f"refresh_profile_{uid}", use_container_width=True
+                "Reload from Local DB",
+                key=f"refresh_profile_{uid}",
+                use_container_width=True,
             )
         with action_col2:
             load_sample_clicked = st.button(
-                "Load sample template", key=f"load_sample_profile_{uid}", use_container_width=True
+                "Load sample template",
+                key=f"load_sample_profile_{uid}",
+                use_container_width=True,
             )
         with action_col3:
             format_clicked = st.button(
-                "Format JSON", key=f"format_profile_json_{uid}", use_container_width=True
+                "Format JSON",
+                key=f"format_profile_json_{uid}",
+                use_container_width=True,
             )
         with action_col4:
             minify_clicked = st.button(
-                "Minify JSON", key=f"minify_profile_json_{uid}", use_container_width=True
+                "Minify JSON",
+                key=f"minify_profile_json_{uid}",
+                use_container_width=True,
             )
         with action_col5:
             validate_clicked = st.button(
-                "Validate JSON", key=f"validate_profile_json_{uid}", use_container_width=True
+                "Validate JSON",
+                key=f"validate_profile_json_{uid}",
+                use_container_width=True,
             )
 
         if refresh_clicked or not st.session_state.get(loaded_flag_key, False):
@@ -1086,9 +1111,7 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
 
         if load_sample_clicked:
             sample = backend.sample_truth_json()
-            _set_editor_content(
-                json.dumps(sample, indent=2, ensure_ascii=False)
-            )
+            _set_editor_content(json.dumps(sample, indent=2, ensure_ascii=False))
             st.session_state[loaded_flag_key] = True
 
         if editor_buffer_key not in st.session_state:
@@ -1103,9 +1126,7 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
         if format_clicked:
             try:
                 parsed = json.loads(buffer_text)
-                _set_editor_content(
-                    json.dumps(parsed, indent=2, ensure_ascii=False)
-                )
+                _set_editor_content(json.dumps(parsed, indent=2, ensure_ascii=False))
                 buffer_text = str(st.session_state.get(editor_buffer_key, "{}"))
             except Exception as exc:
                 st.error(f"Format failed: {exc}")
@@ -1124,8 +1145,12 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
 
         with workspace_col:
             if st_ace is not None:
-                st.caption("Editor: Ace (syntax highlighting, line numbers, Ctrl/Cmd+F search)")
-                ace_key = f"profile_ace_{uid}_{st.session_state.get(ace_version_key, 0)}"
+                st.caption(
+                    "Editor: Ace (syntax highlighting, line numbers, Ctrl/Cmd+F search)"
+                )
+                ace_key = (
+                    f"profile_ace_{uid}_{st.session_state.get(ace_version_key, 0)}"
+                )
                 ace_value = st_ace(
                     value=buffer_text,
                     language="json",
@@ -1144,9 +1169,7 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
                     st.session_state[editor_key] = ace_value
                     buffer_text = ace_value
             else:
-                st.info(
-                    "Advanced editor component unavailable; using fallback editor."
-                )
+                st.info("Advanced editor component unavailable; using fallback editor.")
                 st.text_area(
                     "truth.json",
                     key=editor_key,
@@ -1262,8 +1285,10 @@ def _render_profile_editor_panel(backend: LocalBackend, uid: str) -> None:
                     except Exception as exc:
                         st.error(f"Path error: {exc}")
 
-            save_disabled = parse_error is not None or not is_dict or (
-                is_dirty and not st.session_state.get(save_confirm_key, False)
+            save_disabled = (
+                parse_error is not None
+                or not is_dict
+                or (is_dirty and not st.session_state.get(save_confirm_key, False))
             )
             if is_dirty and not st.session_state.get(save_confirm_key, False):
                 st.warning("Review diff and confirm before saving.")

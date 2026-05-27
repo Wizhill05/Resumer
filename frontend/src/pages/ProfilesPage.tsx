@@ -48,6 +48,7 @@ export default function ProfilesPage() {
   const [users, setUsers] = useState<User[]>([])
   const [selectedUid, setSelectedUid] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
+  const [userError, setUserError] = useState<string | null>(null)
 
   // Tab
   const [activeTab, setActiveTab] = useState<'truth' | 'defaults' | 'templates'>('truth')
@@ -75,13 +76,31 @@ export default function ProfilesPage() {
 
   useEffect(() => { fetchUsers() }, [])
 
+  function normalizeApiError(status: number, text: string): string {
+    const body = (text || '').trim()
+    const isHtml = body.startsWith('<!DOCTYPE html') || body.startsWith('<html')
+    if (isHtml) {
+      return `HTTP ${status}. Received HTML instead of JSON from /api. You're likely hitting the wrong dev server (frontend route), not FastAPI on :8000.`
+    }
+    if (!body) return `HTTP ${status}`
+    return body.slice(0, 240)
+  }
+
   async function fetchUsers() {
     try {
       const res = await fetch(`${API}/users`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(normalizeApiError(res.status, text))
+      }
       const data: User[] = await res.json()
       setUsers(data)
+      setUserError(null)
       if (data.length > 0 && !selectedUid) selectUser(data[0].id)
-    } catch { /* keep */ }
+    } catch (e: any) {
+      setUsers([])
+      setUserError(`Could not load profiles: ${e?.message ?? 'Unknown error'}`)
+    }
   }
 
   async function selectUser(uid: string) {
@@ -120,12 +139,18 @@ export default function ProfilesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: name }),
       })
-      if (!res.ok) throw new Error()
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(normalizeApiError(res.status, text))
+      }
       const data = await res.json()
       setNewName('')
+      setUserError(null)
       await fetchUsers()
       selectUser(data.uid)
-    } catch { /* noop */ }
+    } catch (e: any) {
+      setUserError(`Could not create profile: ${e?.message ?? 'Unknown error'}`)
+    }
   }
 
   function handleTruthChange(value: string) {
@@ -260,6 +285,11 @@ export default function ProfilesPage() {
             />
             <button className="btn-primary" style={{ height: 32, padding: '0 10px', fontSize: 11 }} onClick={createUser}>+</button>
           </div>
+          {userError && (
+            <div style={{ marginTop: 8, color: 'var(--red)', fontSize: 10, lineHeight: 1.4 }}>
+              {userError}
+            </div>
+          )}
         </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {users.length === 0 && (

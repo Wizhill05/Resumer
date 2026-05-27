@@ -74,7 +74,8 @@
 
 #resume-preview li {
     padding-left: 0.03in;
-    margin-bottom: 0.08em;
+    margin-bottom: 0.28em;
+    color: #4a4a4a;
 }
 
 #resume-preview strong {
@@ -105,6 +106,12 @@
     align-items: baseline;
     gap: 0.18in;
     margin-top: 0.18em;
+}
+
+#resume-preview ul + dl,
+#resume-preview ol + dl,
+#resume-preview dl + dl {
+    margin-top: 0.7em;
 }
 
 #resume-preview dl dt {

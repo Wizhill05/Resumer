@@ -33,7 +33,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv()
 load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
 
-from src.gui.services.local_backend import LocalBackend  # noqa: E402
+from src.gui.services.local_backend import DB_PATH, LocalBackend  # noqa: E402
 from src.gui.services.runner import ResumeRunController  # noqa: E402
 from src.api.scrape_service import ScrapeService  # noqa: E402
 from src.api.linkedin_scrape_service import LinkedInScrapeService  # noqa: E402
@@ -52,6 +52,15 @@ _linkedin_scrape_service = LinkedInScrapeService(backend=_backend)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Resumer API", version="1.0.0")
+
+
+@app.on_event("startup")
+def _log_startup_db_state() -> None:
+    try:
+        user_count = len(_backend.list_users())
+        print(f"[Resumer API] SQLite DB: {DB_PATH} (users={user_count})")
+    except Exception as exc:
+        print(f"[Resumer API] Could not read DB state on startup: {exc}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,6 +88,7 @@ class GenerateRequest(BaseModel):
     template_id: str = ""
     model: str = "mistral/mistral-large-latest"
     api_key_env: str = "MISTRAL_API_KEY"
+    api_base: str = ""
     omissions: dict[str, bool] = {}
     mandatory_words: list[str] = []
     agent_instructions: str = ""
@@ -303,77 +313,122 @@ def start_generate(uid: str, body: GenerateRequest, background_tasks: Background
     Returns the project_id immediately; poll /api/users/{uid}/projects/{project_id}/status
     to track progress.
     """
-    # Fetch the user's truth profile from the DB
     truth_data = _backend.get_truth_json(uid)
 
-    # Resolve the job label
     job_label = body.job_label.strip() or body.job_description[:60].strip()
     sanitized_label = _sanitize_label(job_label)
 
-    # Create a DB project entry (status: running)
     project_id = _backend.create_project(
         uid=uid,
         name=job_label or sanitized_label,
         job_description=body.job_description,
     )
 
-    # Write inputs to temp files that the CLI needs
     run_dir = _PROJECT_ROOT / "outputs" / sanitized_label
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    jd_path = run_dir / "job_description.txt"
-    jd_path.write_text(body.job_description, encoding="utf-8")
-
-    data_path = run_dir / "truth.runtime.json"
-    data_path.write_text(json.dumps(truth_data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    template_path = ""
-    css_path = ""
-    template_id = body.template_id.strip()
-    template = _backend.get_resume_template(uid, template_id) if template_id else None
-    if template:
-        if str(template.get("content", "")).strip():
-            template_file = run_dir / "resume_template.runtime.jinja2"
-            template_file.write_text(str(template["content"]), encoding="utf-8")
-            template_path = str(template_file.relative_to(_PROJECT_ROOT))
-        if str(template.get("css_content", "")).strip():
-            css_file = run_dir / "resume_template.runtime.css"
-            css_file.write_text(str(template["css_content"]), encoding="utf-8")
-            css_path = str(css_file.relative_to(_PROJECT_ROOT))
-
-    # Build and start the controller
-    controller = ResumeRunController(workspace_root=_PROJECT_ROOT)
-    _set_controller(project_id, controller)
-
     log_file = run_dir / "terminal_logs.md"
-    log_file.write_text("```text\n", encoding="utf-8")
+    controller: ResumeRunController | None = None
 
-    controller.start_run(
-        jd_path=str(jd_path.relative_to(_PROJECT_ROOT)),
-        data_path=str(data_path.relative_to(_PROJECT_ROOT)),
-        job_label=sanitized_label,
-        model=body.model,
-        api_key_env=body.api_key_env,
-        omissions=body.omissions,
-        mandatory_words=body.mandatory_words,
-        agent_instructions=body.agent_instructions,
-        template_path=template_path,
-        css_path=css_path,
-        project_id=project_id,
-        project_name=job_label or sanitized_label,
-        raw_log_path=str(log_file),
-    )
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("```text\n", encoding="utf-8")
 
-    # Background poller: polls controller until done, then syncs artifacts to DB
-    background_tasks.add_task(
-        _poll_until_done,
-        uid=uid,
-        project_id=project_id,
-        controller=controller,
-        job_id=body.job_id.strip(),
-    )
+        jd_path = run_dir / "job_description.txt"
+        jd_path.write_text(body.job_description, encoding="utf-8")
 
-    return {"project_id": project_id, "status": "started"}
+        data_path = run_dir / "truth.runtime.json"
+        data_path.write_text(
+            json.dumps(truth_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        template_path = ""
+        css_path = ""
+        template_id = body.template_id.strip()
+        template = _backend.get_resume_template(uid, template_id) if template_id else None
+        if template:
+            if str(template.get("content", "")).strip():
+                template_file = run_dir / "resume_template.runtime.jinja2"
+                template_file.write_text(str(template["content"]), encoding="utf-8")
+                template_path = str(template_file.relative_to(_PROJECT_ROOT))
+            if str(template.get("css_content", "")).strip():
+                css_file = run_dir / "resume_template.runtime.css"
+                css_file.write_text(str(template["css_content"]), encoding="utf-8")
+                css_path = str(css_file.relative_to(_PROJECT_ROOT))
+
+        controller = ResumeRunController(workspace_root=_PROJECT_ROOT)
+        controller.start_run(
+            jd_path=str(jd_path.relative_to(_PROJECT_ROOT)),
+            data_path=str(data_path.relative_to(_PROJECT_ROOT)),
+            job_label=sanitized_label,
+            model=body.model,
+            api_key_env=body.api_key_env,
+            api_base=body.api_base,
+            omissions=body.omissions,
+            mandatory_words=body.mandatory_words,
+            agent_instructions=body.agent_instructions,
+            template_path=template_path,
+            css_path=css_path,
+            project_id=project_id,
+            project_name=job_label or sanitized_label,
+            raw_log_path=str(log_file),
+        )
+
+        _set_controller(project_id, controller)
+
+        background_tasks.add_task(
+            _poll_until_done,
+            uid=uid,
+            project_id=project_id,
+            controller=controller,
+            job_id=body.job_id.strip(),
+        )
+
+        return {"project_id": project_id, "status": "started"}
+    except Exception as exc:
+        err = f"Failed to start generation: {exc}"
+
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"[startup-error] {err}\n")
+                f.write("```\n")
+        except Exception:
+            pass
+
+        try:
+            _write_error_markdown(
+                output_dir=run_dir,
+                project_id=project_id,
+                job_id=body.job_id.strip(),
+                error_message=err,
+                logs=[],
+            )
+            _backend.replace_project_artifacts_from_local(
+                uid=uid,
+                project_id=project_id,
+                output_dir=run_dir,
+            )
+        except Exception:
+            pass
+
+        try:
+            _backend.update_project_status(
+                uid=uid,
+                project_id=project_id,
+                status="failed",
+                error_message=err,
+            )
+        except Exception:
+            pass
+
+        if controller is not None:
+            try:
+                controller.stop_run()
+            except Exception:
+                pass
+        _remove_controller(project_id)
+
+        raise HTTPException(status_code=500, detail=err)
 
 
 @app.get("/api/users/{uid}/projects/{project_id}/status")
@@ -390,8 +445,15 @@ def get_run_status(uid: str, project_id: str) -> dict[str, Any]:
                     "project_id": project_id,
                     "model": "-",
                     "current_step": "-",
+                    "active_agent": "-",
+                    "active_task": "-",
                     "iteration": "-",
                     "output_dir": "-",
+                    "final_pdf": "-",
+                    "run_started_at": None,
+                    "run_finished_at": None,
+                    "exit_code": None,
+                    "error_message": str(p.get("error_message", "") or ""),
                 }
         raise HTTPException(404, "Project not found")
 
@@ -418,6 +480,27 @@ def get_run_logs(uid: str, project_id: str, limit: int = 500) -> list[dict[str, 
     """Return recent log entries for a running project."""
     ctrl = _get_controller(project_id)
     if ctrl is None:
+        projects = _backend.list_projects(uid)
+        for p in projects:
+            if p["id"] == project_id:
+                msg = str(p.get("error_message", "") or "").strip()
+                if not msg:
+                    return []
+                updated_at = p.get("updated_at")
+                ts = int(time.time())
+                if hasattr(updated_at, "timestamp"):
+                    try:
+                        ts = int(updated_at.timestamp())
+                    except Exception:
+                        pass
+                return [
+                    {
+                        "ts": ts,
+                        "stream": "stderr",
+                        "text": msg,
+                        "level": "error",
+                    }
+                ]
         return []
     ctrl.poll()
     entries = ctrl.logs[-limit:]

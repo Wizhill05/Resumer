@@ -43,6 +43,7 @@ Create a `.env` file in the root directory:
 ```env
 MISTRAL_API_KEY=your_mistral_key_here
 OPENAI_API_KEY=your_openai_key_here
+GROQ_API_KEY=your_groq_key_here
 ```
 
 ### 2. Start the Backend (FastAPI)

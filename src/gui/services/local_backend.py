@@ -34,9 +34,18 @@ class LocalBackend:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
 
-        self.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        self.conn = sqlite3.connect(
+            str(DB_PATH),
+            check_same_thread=False,
+            timeout=30,
+        )
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON;")
+        self.conn.execute("PRAGMA busy_timeout = 30000;")
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL;")
+        except Exception:
+            pass
         self._init_schema()
         self._ensure_default_user()
 

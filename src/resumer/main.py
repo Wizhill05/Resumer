@@ -11,6 +11,7 @@ Optional flags:
     --job-label <name>                        (optional, skips prompt)
     --model <provider/model-id>               (optional runtime model override)
     --api-key-env <ENV_VAR>                   (optional API key env override)
+    --api-base <URL>                          (optional custom provider base URL)
     --agent-instructions "<text>"             (optional extra model guidance)
     --no-objective    Omit the objective section
     --no-education    Omit the education section
@@ -257,17 +258,55 @@ def _sanitize_folder_name(name: str) -> str:
 
 
 def _extract_json_object(raw_text: str) -> str:
-    """Extract the first JSON object from model output text."""
+    """Extract the first matching JSON object or array using a brace/bracket stack."""
+    raw_text = raw_text.strip()
+    
+    # Try standard fenced regex first
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
     if fenced:
         return fenced.group(1).strip()
 
-    first = raw_text.find("{")
-    last = raw_text.rfind("}")
-    if first != -1 and last != -1 and first < last:
-        return raw_text[first : last + 1].strip()
+    start_idx = raw_text.find("{")
+    if start_idx == -1:
+        start_idx = raw_text.find("[")
+    if start_idx == -1:
+        return raw_text
 
-    return raw_text.strip()
+    stack = []
+    in_string = False
+    escape = False
+
+    for i in range(start_idx, len(raw_text)):
+        char = raw_text[i]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+        else:
+            if char == '"':
+                in_string = True
+            elif char in ("{", "["):
+                stack.append(char)
+            elif char in ("}", "]"):
+                if not stack:
+                    continue
+                last_open = stack.pop()
+                if not stack:
+                    # Stack is empty! We found the exact matching end.
+                    return raw_text[start_idx : i + 1]
+
+    # If stack never emptied, fall back to extracting from first to last
+    last_idx = raw_text.rfind("}")
+    if last_idx == -1:
+        last_idx = raw_text.rfind("]")
+    if last_idx != -1 and start_idx < last_idx:
+        return raw_text[start_idx : last_idx + 1]
+
+    return raw_text
 
 
 def _result_to_raw_text(result: Any) -> str:
@@ -769,6 +808,7 @@ def _kickoff_with_retries(
     from src.resumer.crew import ResumerCrew  # noqa: E402
 
     last_error: Exception | None = None
+    rate_limit_delays = [5, 15, 60]  # escalating backoff for 429s
     for attempt in range(1, attempts + 1):
         try:
             _info(f"{label}: starting attempt {attempt}/{attempts}")
@@ -800,7 +840,14 @@ def _kickoff_with_retries(
                 error_text=str(exc),
             )
             if attempt < attempts:
-                time.sleep(delay_seconds)
+                exc_str = str(exc).lower()
+                is_rate_limit = "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str
+                if is_rate_limit:
+                    rl_delay = rate_limit_delays[min(attempt - 1, len(rate_limit_delays) - 1)]
+                    _warn(f"Rate limited — waiting {rl_delay}s before retry...")
+                    time.sleep(rl_delay)
+                else:
+                    time.sleep(delay_seconds)
     if last_error:
         raise last_error
     raise RuntimeError(f"{label} failed without an exception")
@@ -1350,6 +1397,453 @@ def _prepare_resume_json_for_render(
     return current_json
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Orphan line detection & LLM re-prompting
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _match_orphan_to_resume_json(
+    orphan_text: str,
+    resume_data: dict[str, Any],
+) -> tuple[str, int, int] | None:
+    """Find the section/item/bullet index in resume_data matching orphan_text.
+
+    Compares the browser ``textContent`` (no markdown) against resume JSON
+    bullets with ``**`` bold markers stripped.
+
+    Returns (section_key, item_index, bullet_index) or None if not found.
+    section_key is one of 'projects', 'experience', 'activities'.
+    """
+    clean = lambda s: re.sub(r"\*\*", "", s).strip()  # noqa: E731
+    orphan_clean = clean(orphan_text)
+
+    for section_key, list_field, bullet_field in (
+        ("projects", "projects", "points"),
+        ("experience", "experience", "bullets"),
+        ("activities", "activities", "bullets"),
+    ):
+        items = resume_data.get(section_key) or []
+        for item_idx, item in enumerate(items):
+            bullets = item.get(bullet_field) or []
+            for bullet_idx, bullet in enumerate(bullets):
+                if clean(bullet) == orphan_clean:
+                    return section_key, item_idx, bullet_idx
+    return None
+
+
+def _build_orphan_fix_prompt(
+    orphan_data: list[dict[str, Any]],
+    resume_data: dict[str, Any],
+    job_analysis_json: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a single LLM prompt that fixes all orphan/oversize bullets.
+
+    Returns (prompt_text, mapping_list) where mapping_list tracks which
+    resume JSON location each bullet index in the prompt corresponds to.
+    """
+    mapping: list[dict[str, Any]] = []
+    bullet_blocks: list[str] = []
+
+    for idx, orphan in enumerate(orphan_data, start=1):
+        match = _match_orphan_to_resume_json(orphan["text"], resume_data)
+        if match is None:
+            _warn(f"Orphan fix: could not locate bullet in resume JSON — skipping: {orphan['text'][:60]}...")
+            continue
+
+        section_key, item_idx, bullet_idx = match
+        items = resume_data[section_key]
+        original_md = (items[item_idx].get("points") or items[item_idx].get("bullets"))[bullet_idx]
+
+        # Section context for the LLM
+        item = items[item_idx]
+        if section_key == "projects":
+            context = f"Project: \"{item.get('name', '')}\" — {item.get('project_summary', '')}"
+        elif section_key == "experience":
+            context = f"Experience: \"{item.get('role', '')}\" at {item.get('organization', '')}"
+        else:
+            context = f"Activities: \"{item.get('topic', '')}\""
+
+        fix_type = orphan["fix_type"]
+        chars_per_line = orphan["charsPerLine"]
+        target_min = orphan["targetCharsMin"]
+        target_max = orphan["targetCharsMax"]
+
+        # LLMs overcount characters by ~8-10% under strict formatting. Feed
+        # a slightly adjusted budget into the prompt so the actual output lands
+        # beautifully between 1.80 and 1.95 lines.
+        PROMPT_BUDGET = 0.92
+        prompt_tgt_min = int(target_min * PROMPT_BUDGET)
+        prompt_tgt_max = int(target_max * PROMPT_BUDGET)
+
+        if fix_type == "expand":
+            chars_to_add_min = max(0, prompt_tgt_min - orphan["currentChars"])
+            chars_to_add_max = max(0, prompt_tgt_max - orphan["currentChars"])
+            instruction = (
+                f"  FIX: EXPAND this bullet so it fills between 1.8 and 1.9 lines in the final PDF.\n"
+                f"  One rendered line = {chars_per_line} visible characters at current font size.\n"
+                f"  Currently renders as {orphan['renderedLines']} lines (orphan — second line nearly empty).\n"
+                f"  You need to ADD approximately {chars_to_add_min}-{chars_to_add_max} more visible characters.\n"
+                f"  Target total: {prompt_tgt_min}-{prompt_tgt_max} visible characters (excluding ** markers).\n"
+                f"  HARD MAX: {prompt_tgt_max} visible chars. Exceeding this = 3 lines = REJECTED."
+            )
+        else:
+            instruction = (
+                f"  FIX: SHORTEN this bullet to fit exactly 2 lines maximum (ideally filling 1.8 to 1.9 lines).\n"
+                f"  One rendered line = {chars_per_line} visible characters at current font size.\n"
+                f"  Currently renders as {orphan['renderedLines']} lines (too long).\n"
+                f"  Target total: {prompt_tgt_min}-{prompt_tgt_max} visible characters (excluding ** markers).\n"
+                f"  HARD MAX: {prompt_tgt_max} visible chars. Exceeding this = 3 lines = REJECTED."
+            )
+
+        block = (
+            f"Bullet {idx}:\n"
+            f"  {context}\n"
+            f"  Original: \"{original_md}\"\n"
+            f"  Current visible chars: {orphan['currentChars']}\n"
+            f"{instruction}"
+        )
+        bullet_blocks.append(block)
+        mapping.append({
+            "prompt_index": idx,
+            "section_key": section_key,
+            "item_idx": item_idx,
+            "bullet_idx": bullet_idx,
+            "original_md": original_md,
+            "fix_type": fix_type,
+            "target_min": target_min,
+            "target_max": target_max,
+        })
+
+    if not bullet_blocks:
+        return "", []
+
+    # Extract brief keywords from job analysis for context
+    try:
+        ja = json.loads(job_analysis_json)
+        keywords = ja.get("keywords", [])[:8]
+        required = ja.get("required_skills", [])[:6]
+        kw_text = ", ".join(keywords + required) if (keywords or required) else "N/A"
+    except Exception:
+        kw_text = "N/A"
+
+    prompt = (
+        "OUTPUT FORMAT — THIS IS MANDATORY:\n"
+        "You MUST respond with ONLY a raw JSON object. No explanation. No prose. No markdown fences.\n"
+        "Shape:\n"
+        "{\n"
+        '  "bullets": [\n'
+        '    {"index": 1, "replacement": "Rewritten bullet text here."},\n'
+        '    {"index": 2, "replacement": "..."}\n'
+        "  ]\n"
+        "}\n\n"
+        "TASK: Rewrite resume bullet points to fix PDF line-wrap issues.\n"
+        "Font: Computer Modern Serif (proportional). Exact character limits given per bullet.\n\n"
+        "RULES:\n"
+        "- Character counts are VISIBLE characters only. Markdown bold markers (**) do NOT count.\n"
+        "- Start every bullet with a strong action verb.\n"
+        "- Use **bold** to highlight key technologies, methodologies, and metrics.\n"
+        "- Add job-relevant technical detail when expanding (use keywords from the job).\n"
+        "- Keep the core meaning and factual claims of the original.\n"
+        "- Each rewritten bullet MUST stay within its target character range.\n"
+        "- No bullet may EVER exceed 2 rendered lines. Respect the HARD MAX.\n"
+        "- No emojis.\n\n"
+        f"Job-relevant keywords: {kw_text}\n\n"
+        + "\n\n".join(bullet_blocks)
+        + "\n\n"
+        "Respond with ONLY the JSON object shown above. Nothing else."
+    )
+    return prompt, mapping
+
+
+def _repair_json_string(raw: str) -> str:
+    """Best-effort repair of common LLM JSON mistakes."""
+    # Remove markdown fences if present
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw.strip())
+    # Remove JS style single-line comments on their own line
+    raw = re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE)
+    # Remove JS style block comments
+    raw = re.sub(r"/\*.*?\*/", "", raw, flags=re.DOTALL)
+    # Strip trailing commas before ] or }
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+    # Replace smart quotes with straight quotes
+    raw = raw.replace("\u201c", '"').replace("\u201d", '"')
+    raw = raw.replace("\u2018", "'").replace("\u2019", "'")
+    # Replace single quotes with double quotes for keys and string values
+    raw = re.sub(r"'(\w+)'\s*:", r'"\1":', raw)
+    raw = re.sub(r":\s*'([^']*)'", r': "\1"', raw)
+    # Escape unescaped newlines inside string values
+    # (match content between quotes, replace literal newlines)
+    def _fix_newlines(m: re.Match) -> str:
+        return m.group(0).replace("\n", "\\n")
+    raw = re.sub(r'"(?:[^"\\]|\\.)*"', _fix_newlines, raw, flags=re.DOTALL)
+    return raw
+
+
+def _fix_orphan_bullets(
+    orphan_data: list[dict[str, Any]],
+    resume_json: str,
+    job_analysis_json: str,
+) -> tuple[str, int]:
+    """Call the LLM to fix orphan/oversize bullets and return updated resume JSON.
+
+    Makes a direct litellm.completion() call (no CrewAI overhead).
+
+    Returns (updated_json, applied_count).
+    """
+    import litellm
+
+    resume_data = json.loads(resume_json)
+    prompt, mapping = _build_orphan_fix_prompt(orphan_data, resume_data, job_analysis_json)
+
+    if not prompt or not mapping:
+        _info("Orphan fix: no fixable bullets found.")
+        return resume_json, 0
+
+    _info(f"Orphan fix: requesting LLM rewrite for {len(mapping)} bullet(s)...")
+
+    # Resolve model from crew.py's runtime config
+    from src.resumer.crew import resolve_llm_runtime, _normalize_anthropic_base_url
+    model, key_env, api_key = resolve_llm_runtime()
+    _raw_api_base = (os.environ.get("RESUMER_API_BASE") or "").strip()
+    _api_base = _normalize_anthropic_base_url(model, _raw_api_base) if _raw_api_base else ""
+
+    system_msg = (
+        "You are a precise resume editor. You ONLY output valid JSON. "
+        "No explanation, no markdown fences, no trailing commas. "
+        "Every string value must be on a single line (no literal newlines inside strings)."
+    )
+
+    raw_text = ""
+    rate_limit_delays = [5, 15, 60]  # seconds — retry backoff for 429s
+
+    def _is_rate_limit(exc: Exception) -> bool:
+        exc_str = str(exc).lower()
+        return "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str
+
+    def _llm_call(*, use_response_format: bool, override_prompt: str | None = None) -> str:
+        kwargs: dict[str, Any] = dict(
+            model=model,
+            api_key=api_key,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": override_prompt if override_prompt is not None else prompt},
+            ],
+            temperature=0.5,
+            max_tokens=4000,
+        )
+        if _api_base:
+            kwargs["base_url"] = _api_base
+        if use_response_format:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = litellm.completion(**kwargs)
+        return resp.choices[0].message.content.strip()
+
+    # Try calling with response_format={"type": "json_object"} first,
+    # with automatic retries on rate-limit (429) errors.
+    for attempt_idx in range(len(rate_limit_delays) + 1):
+        try:
+            raw_text = _llm_call(use_response_format=True)
+            break  # success
+        except Exception as exc:
+            if _is_rate_limit(exc):
+                if attempt_idx < len(rate_limit_delays):
+                    delay = rate_limit_delays[attempt_idx]
+                    _warn(f"Rate limited — waiting {delay}s before retry {attempt_idx + 1}/{len(rate_limit_delays)}...")
+                    time.sleep(delay)
+                    continue
+                _err(f"Orphan fix LLM call failed after {len(rate_limit_delays)} retries: {exc}")
+                return resume_json, 0
+
+            # Fallback if response_format is not supported by provider/model
+            if "response_format" in str(exc) or "format" in str(exc).lower():
+                for fb_idx in range(len(rate_limit_delays) + 1):
+                    try:
+                        raw_text = _llm_call(use_response_format=False)
+                        break
+                    except Exception as fallback_exc:
+                        if _is_rate_limit(fallback_exc) and fb_idx < len(rate_limit_delays):
+                            delay = rate_limit_delays[fb_idx]
+                            _warn(f"Rate limited (fallback) — waiting {delay}s before retry {fb_idx + 1}/{len(rate_limit_delays)}...")
+                            time.sleep(delay)
+                            continue
+                        _err(f"Orphan fix LLM call failed on fallback: {fallback_exc}")
+                        return resume_json, 0
+                break  # got fallback result
+            else:
+                _err(f"Orphan fix LLM call failed: {exc}")
+                return resume_json, 0
+
+    # Parse response JSON — try raw first, then repaired
+    replacements: list[dict] = []
+    for attempt_label, text in (("raw", raw_text), ("repaired", _repair_json_string(raw_text))):
+        try:
+            extracted = _extract_json_object(text)
+            result = json.loads(extracted)
+            replacements = result.get("bullets", [])
+            if replacements:
+                break
+        except Exception:
+            continue
+
+    # Prose / thinking-model fallback: model returned plain text instead of JSON.
+    if not replacements and raw_text.strip() and "{" not in raw_text:
+        _warn("Orphan fix: no JSON in response — attempting prose fallback.")
+
+        def _extract_bullet_from_prose(text: str) -> str:
+            """Extract a clean bullet string from various non-JSON response formats."""
+            # Strategy 1: thinking-model scratchpad — backtick fragments with char counts.
+            # Pattern: `fragment` (N) repeated, joined = full bullet.
+            # e.g. `HackNight 2024` (14) *   ` and conducted` (14) ...
+            backtick_fragments = re.findall(r"`([^`]+)`", text)
+            if backtick_fragments:
+                candidate = "".join(backtick_fragments).strip()
+                # Sanity: must look like a real sentence (> 20 chars, starts with capital/verb)
+                if len(candidate) > 20:
+                    return candidate
+
+            # Strategy 2: single clean line that starts with a capital letter / action verb
+            # (plain prose response, no CoT)
+            cot_pattern = re.compile(
+                r"(let'?s\s|length\s*:|range\s*:|total\s*:|let me|i'll |i will |"
+                r"here'?s |count|perfect|great|note:|tip:|\bcheck\b|\bstep\b)",
+                re.IGNORECASE,
+            )
+            candidate_lines = [
+                ln.strip()
+                for ln in text.splitlines()
+                if ln.strip() and not cot_pattern.search(ln) and len(ln.strip()) > 20
+            ]
+            if candidate_lines:
+                # Prefer lines that start with an uppercase letter (likely the bullet)
+                for ln in candidate_lines:
+                    if ln[0].isupper() and not ln.startswith("Bullet"):
+                        return ln
+
+            return ""
+
+        if len(mapping) == 1:
+            bullet_text = _extract_bullet_from_prose(raw_text)
+            if bullet_text:
+                replacements = [{"index": mapping[0]["prompt_index"], "replacement": bullet_text}]
+                _warn(f"Orphan fix prose fallback (single bullet): {bullet_text[:80]}...")
+        else:
+            # Multiple bullets — try splitting on "Bullet N:" markers first
+            split_pattern = re.compile(r"Bullet\s+(\d+)\s*[:\-]", re.IGNORECASE)
+            parts = split_pattern.split(raw_text)
+            if len(parts) >= 3:
+                i = 1
+                while i + 1 < len(parts):
+                    try:
+                        bullet_idx = int(parts[i])
+                        bullet_text = _extract_bullet_from_prose(parts[i + 1])
+                        if bullet_text:
+                            replacements.append({"index": bullet_idx, "replacement": bullet_text})
+                    except (ValueError, IndexError):
+                        pass
+                    i += 2
+
+    # One-at-a-time fallback: if multi-bullet batch still produced nothing
+    # (thinking model scratchpad too tangled to parse), retry each bullet individually.
+    if not replacements and len(mapping) > 1:
+        _warn("Orphan fix: batch parse failed — retrying one bullet at a time.")
+        for entry in mapping:
+            # Find the original orphan dict that corresponds to this mapping entry
+            single_orphan = next(
+                (
+                    o for o in orphan_data
+                    if _match_orphan_to_resume_json(o["text"], resume_data)
+                    == (entry["section_key"], entry["item_idx"], entry["bullet_idx"])
+                ),
+                None,
+            )
+            if single_orphan is None:
+                continue
+            single_prompt, _ = _build_orphan_fix_prompt([single_orphan], resume_data, job_analysis_json)
+            if not single_prompt:
+                continue
+            try:
+                single_raw = _llm_call(use_response_format=False, override_prompt=single_prompt)
+                # Parse result
+                single_repl: list[dict] = []
+                for _, text in (("raw", single_raw), ("repaired", _repair_json_string(single_raw))):
+                    try:
+                        extracted = _extract_json_object(text)
+                        result2 = json.loads(extracted)
+                        single_repl = result2.get("bullets", [])
+                        if single_repl:
+                            break
+                    except Exception:
+                        continue
+                if not single_repl and "{" not in single_raw:
+                    bullet_text = _extract_bullet_from_prose(single_raw)
+                    if bullet_text:
+                        single_repl = [{"index": 1, "replacement": bullet_text}]
+                if single_repl:
+                    replacements.append({
+                        "index": entry["prompt_index"],
+                        "replacement": single_repl[0].get("replacement", ""),
+                    })
+            except Exception as exc:
+                _warn(f"Orphan fix single-bullet call failed for index {entry['prompt_index']}: {exc}")
+
+    # Log direct LLM call to conversation trace
+    try:
+        _append_model_trace_entry(
+            label="Orphan and oversize bullet fix",
+            crew_method_name="orphan_fix_direct_call",
+            attempt=1,
+            attempts=1,
+            inputs={"prompt": prompt, "system_message": system_msg},
+            output_text=raw_text,
+            error_text="" if replacements else "Failed to parse replacements. Raw response printed below.",
+        )
+    except Exception as exc:
+        _warn(f"Orphan fix trace logging failed: {exc}")
+
+    if not replacements:
+        _err("Orphan fix: could not parse LLM response after repair attempts")
+        _err(f"Raw LLM Response was:\n{raw_text}")
+        return resume_json, 0
+
+    # Apply replacements to resume data
+    applied = 0
+    for repl in replacements:
+        idx = repl.get("index")
+        new_text = repl.get("replacement", "").strip()
+        if not idx or not new_text:
+            continue
+
+        # Find the mapping entry for this index
+        entry = next((m for m in mapping if m["prompt_index"] == idx), None)
+        if entry is None:
+            continue
+
+        # Validate character count (visible chars, excluding **)
+        visible_len = len(re.sub(r"\*\*", "", new_text))
+        if visible_len > entry["target_max"] * 1.05:
+            _warn(
+                f"Orphan fix: bullet {idx} too long ({visible_len} > {entry['target_max']}), skipping"
+            )
+            continue
+
+        section_key = entry["section_key"]
+        item_idx = entry["item_idx"]
+        bullet_idx = entry["bullet_idx"]
+
+        items = resume_data[section_key]
+        bullet_field = "points" if section_key == "projects" else "bullets"
+        items[item_idx][bullet_field][bullet_idx] = new_text
+        applied += 1
+
+    if applied > 0:
+        _ok(f"Orphan fix: applied {applied}/{len(mapping)} bullet replacement(s)")
+    else:
+        _warn("Orphan fix: no replacements applied")
+
+    return json.dumps(resume_data, ensure_ascii=False, indent=2), applied
+
+
 def _compile_resume_candidate(
     *,
     resume_json: str,
@@ -1405,6 +1899,11 @@ def main() -> None:
         help="Environment variable name that stores the API key for the selected model",
     )
     parser.add_argument(
+        "--api-base",
+        default="",
+        help="Optional base URL for OpenAI/Anthropic-compatible endpoints",
+    )
+    parser.add_argument(
         "--no-objective", action="store_true", help="Omit the objective section"
     )
     parser.add_argument(
@@ -1457,6 +1956,8 @@ def main() -> None:
         os.environ["RESUMER_MODEL"] = args.model.strip()
     if args.api_key_env.strip():
         os.environ["RESUMER_API_KEY_ENV"] = args.api_key_env.strip()
+    if args.api_base.strip():
+        os.environ["RESUMER_API_BASE"] = args.api_base.strip()
 
     # Import crew after model env is configured so runtime model selection takes effect.
     from src.resumer.crew import resolve_llm_runtime  # noqa: E402
@@ -1485,6 +1986,8 @@ def main() -> None:
         )
         sys.exit(1)
     _info(f"Model: {selected_model}")
+    if os.environ.get("RESUMER_API_BASE", "").strip():
+        _info(f"API Base: {os.environ['RESUMER_API_BASE'].strip()}")
 
     # ── Load data ────────────────────────────────────────────────────────
     _step(1, "Loading inputs…")
@@ -1669,6 +2172,12 @@ def main() -> None:
                 "Previous attempt failed during staged generation. Produce stricter "
                 "valid JSON and keep all required skills visible."
             )
+            # Escalating backoff before next full attempt when rate-limited
+            exc_str = str(exc).lower()
+            if "ratelimit" in exc_str or "rate_limit" in exc_str or "429" in exc_str:
+                rl_delay = [15, 30, 60][min(run_attempt - 1, 2)]
+                _warn(f"Rate limited — waiting {rl_delay}s before next full attempt...")
+                time.sleep(rl_delay)
             continue
 
         draft_iteration = 1
@@ -1709,6 +2218,52 @@ def main() -> None:
                 continue
             else:
                 _warn("Underfilled page on final attempt. Accepting as fallback to ensure resume is generated.")
+
+        # ── Orphan line fix: detect and re-prompt ────────────────────────
+        MAX_ORPHAN_PASSES = 2
+        for orphan_pass in range(1, MAX_ORPHAN_PASSES + 1):
+            orphan_data = _shared_state.get("last_orphan_data") or []
+            if not orphan_data:
+                break  # no orphans — done
+
+            _info(
+                f"Orphan fix pass {orphan_pass}/{MAX_ORPHAN_PASSES}: "
+                f"fixing {len(orphan_data)} bullet(s)..."
+            )
+            try:
+                current_json, applied_count = _fix_orphan_bullets(
+                    orphan_data=orphan_data,
+                    resume_json=current_json,
+                    job_analysis_json=job_analysis_json,
+                )
+                if applied_count == 0:
+                    _info("Orphan fix: nothing changed, skipping re-compile.")
+                    break
+                # Re-compile with fixed bullets
+                draft_iteration += 1
+                current_json = _prepare_resume_json_for_render(
+                    current_json,
+                    args=args,
+                    jd=jd,
+                    skill_pool=skill_pool,
+                    profile_project_links=profile_project_links,
+                )
+                _, pages, overflow_lines, content_height = _compile_resume_candidate(
+                    resume_json=current_json,
+                    iteration=draft_iteration,
+                    compile_pdf=compile_pdf,
+                    output_dir=output_dir,
+                    get_page_count=_get_page_count,
+                    get_overflow_lines=lambda _: 0,
+                    shared_state=_shared_state,
+                )
+                _ok(
+                    f"Orphan fix pass {orphan_pass}: re-compiled. "
+                    f"Content height: {content_height}px"
+                )
+            except Exception as exc:
+                _warn(f"Orphan fix pass {orphan_pass} failed: {exc}")
+                break
 
         final_success = True
         _ok(

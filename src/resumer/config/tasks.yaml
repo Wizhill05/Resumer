@@ -95,7 +95,9 @@ write_summary_skills:
           1. EXACTLY 1 rendered line: Restrict the bullet point to 12-14 words (approx. 80-105 characters).
           2. EXACTLY 2 full rendered lines: If you need to write more, make sure it is 28-31 words (approx. 180-220 characters) so that the second line is substantial (at least 8-10 words) and almost completely filled.
           3. STRICTLY PROHIBITED (The "Orphan Zone"): Do NOT write bullets that are 14-25 words (approx. 110-170 characters). These are in the "orphan zone" and will wrap with only 1-2 trailing words on the second line, wasting space.
-    - Use markdown bold only to highlight important data such as impact numbers, scale, ranking, latency, or other quantified outcomes. Do not use bold in professional summary or skills categories/items.
+    - Use markdown bold to highlight all important details, key technologies, methodologies, and significant achievements (as well as impact numbers and metrics). Do not use bold in professional summary or skills categories/items.
+    - Write in a highly natural, organic, human-like voice (avoid typical robotic AI words/phrases like 'spearheaded', 'leveraged', 'engineered', 'streamlined', 'pioneered', 'testament').
+    - Introduce exactly 1 minor, natural spelling mistake in the professional summary (e.g. 'managment' instead of 'management', or 'responsble' instead of 'responsible') to make the writing look authentically human.
     - If repair feedback is provided, fix exactly those omissions.
     - Absolutely do not use any emojis.
 
@@ -163,13 +165,15 @@ write_projects_section:
     - Every project must include a "points" list with exactly 3 unordered items.
     - Start each project point with an action verb (for example: Built,
       Developed, Optimized, Automated, Delivered).
-    - Use markdown bold only to highlight important data such as impact numbers,
-      scale, ranking, latency, throughput, cost, accuracy, coverage, users, or
-      other quantified outcomes.
+    - Use markdown bold to highlight all important details, key technologies,
+      methodologies, and significant achievements (as well as impact numbers
+      and metrics).
     - You may add job-relevant technologies and phrasing to improve ATS match,
       including tools from required/preferred skills, as long as the final text
       stays plausible and resume-ready.
     - Prefer quantified, impact-focused bullets.
+    - Write in a highly natural, organic, human-like voice (avoid typical robotic AI words/phrases like 'spearheaded', 'leveraged', 'engineered', 'streamlined', 'pioneered', 'testament').
+    - Introduce exactly 1 minor, natural spelling mistake in one of the project bullet points (e.g. 'devloped' instead of 'developed', or 'implemeted' instead of 'implemented') to make the writing look authentically human.
     - For newly introduced projects, include concrete numeric technical outcomes
       (for example latency reduction %, throughput increase %, cost reduction %,
       error-rate reduction %, test coverage increase %) instead of generic claims.
@@ -222,12 +226,14 @@ write_experience_section:
           3. STRICTLY PROHIBITED (The "Orphan Zone"): Do NOT write bullets that are 14-25 words (approx. 130-170 characters). These are in the "orphan zone" and will wrap with only 1-2 trailing words on the second line, wasting space.
     - Start each experience bullet with an action verb (for example: Built,
       Developed, Optimized, Automated, Delivered).
-    - Use markdown bold only to highlight important data such as impact numbers,
-      scale, ranking, latency, throughput, cost, accuracy, coverage, users, or
-      other quantified outcomes.
+    - Use markdown bold to highlight all important details, key technologies,
+      methodologies, and significant achievements (as well as impact numbers
+      and metrics).
     - You may add job-relevant technologies and phrasing to improve ATS match,
       including tools from required/preferred skills.
     - Prefer quantified, impact-focused bullets.
+    - Write in a highly natural, organic, human-like voice (avoid typical robotic AI words/phrases like 'spearheaded', 'leveraged', 'engineered', 'streamlined', 'pioneered', 'testament').
+    - Introduce exactly 1 minor, natural spelling mistake in one of the experience bullet points (e.g. 'optmized' instead of 'optimized', or 'experence' instead of 'experience') to make the writing look authentically human.
     - Never include the same freelance/contract/independent client work in both
       projects and work experience.
     - Use "Independent Projects" only as an absolute last choice when fewer

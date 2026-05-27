@@ -59,18 +59,19 @@
 {% set project_summary = (project.project_summary or '') | trim %}
 {% set completion_time = (project.completion_time or '') | trim %}
 {% set link_label = project.github_path if project.github_path else project_link | replace('https://', '') | replace('http://', '') | replace('www.', '') %}
-
-{% if project_link %}
-**{{ project.name }}**{% if project_summary %} | {{ project_summary }}{% endif %} | [{{ link_label }}]({{ project_link if project_link.lower().startswith('http') else 'https://' + project_link }})
-{% else %}
-**{{ project.name }}**{% if project_summary %} | {{ project_summary }}{% endif %}
-{% endif %}
+{% set name_part = project.name %}
+{% set summary_part = " | " + project_summary if project_summary else "" %}
+{% set link_md = "[" + link_label + "]" + "(" + (project_link if project_link.lower().startswith('http') else 'https://' + project_link) + ")" if project_link else "" %}
+{% set link_part = " | " + link_md if project_link else "" %}
+**{{ name_part }}{{ summary_part }}{{ link_part }}**
 {% if completion_time %}
-~ {{ completion_time }}
+~ **{{ completion_time }}**
 {% endif %}
+
 {% for point in project.points if point %}
 - {{ point }}
 {% endfor %}
+
 {% endfor %}
 {% endif %}
 {% if resume.experience %}
@@ -78,8 +79,8 @@
 ## EXPERIENCE
 {% for exp in resume.experience %}
 
-**{{ exp.role }}** | {{ exp.organization }} | {{ exp.location }}
-~ {{ exp.duration }}
+**{{ exp.role }} | {{ exp.organization }} | {{ exp.location }}**
+~ **{{ exp.duration }}**
 {% for bullet in exp.bullets %}
 - {{ bullet }}
 {% endfor %}
@@ -93,6 +94,7 @@
 
 **{{ activity.topic }}**
 {% endif %}
+
 {% for bullet in activity.bullets %}
 - {{ bullet }}
 {% endfor %}

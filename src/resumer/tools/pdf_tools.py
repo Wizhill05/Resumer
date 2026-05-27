@@ -81,6 +81,7 @@ _shared_state: dict = {
     "output_dir": "",
     "template_path": "",
     "css_path": "",
+    "last_orphan_data": [],
 }
 
 
@@ -134,14 +135,15 @@ def compile_pdf(resume_json: str, iteration: str) -> str:
     if not css_path_str:
         css_path_str = str(TEMPLATE_CSS)
 
-    _, content_height = generate_pdf(
+    _, content_height, orphan_data = generate_pdf(
         md_path=str(md_path),
         css_path=css_path_str,
         output_path=str(pdf_path),
     )
 
-    # Store content height so main.py can detect underflow
+    # Store content height and orphan data so main.py can access them
     _shared_state["last_content_height"] = content_height
+    _shared_state["last_orphan_data"] = orphan_data or []
 
     page_count = _get_page_count(pdf_path)
     return f"PDF compiled: {pdf_path.resolve()}\nPage count: {page_count}"

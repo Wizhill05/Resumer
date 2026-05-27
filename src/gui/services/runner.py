@@ -90,6 +90,8 @@ class ResumeRunController:
         self._suppress_profile_block = False
         self._suppress_final_answer_block = False
         self._raw_log_path = ""
+        self._last_output_ts: float = 0.0
+        self._last_heartbeat_ts: float = 0.0
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -102,6 +104,7 @@ class ResumeRunController:
         job_label: str,
         model: str,
         api_key_env: str,
+        api_base: str = "",
         omissions: dict[str, bool],
         mandatory_words: list[str] | None = None,
         agent_instructions: str = "",
@@ -130,6 +133,7 @@ class ResumeRunController:
             "uv",
             "run",
             "python",
+            "-u",
             "src/resumer/main.py",
             "--jd",
             jd_path,
@@ -142,6 +146,8 @@ class ResumeRunController:
             "--api-key-env",
             api_key_env,
         ]
+        if api_base.strip():
+            cmd.extend(["--api-base", api_base.strip()])
 
         flag_map = {
             "no_objective": "--no-objective",
@@ -173,6 +179,11 @@ class ResumeRunController:
         env = os.environ.copy()
         env["RESUMER_MODEL"] = model
         env["RESUMER_API_KEY_ENV"] = api_key_env
+        env["PYTHONUNBUFFERED"] = "1"
+        if api_base.strip():
+            env["RESUMER_API_BASE"] = api_base.strip()
+        else:
+            env.pop("RESUMER_API_BASE", None)
 
         creationflags = 0
         if os.name == "nt":
@@ -193,6 +204,17 @@ class ResumeRunController:
         )
 
         self.status.state = "running"
+        now = time.time()
+        self._last_output_ts = now
+        self._last_heartbeat_ts = now
+        self.logs.append(
+            LogEntry(
+                ts=now,
+                stream="event",
+                text="Run launched. Waiting for CLI output...",
+                level="event",
+            )
+        )
         self._start_reader_threads()
 
     def stop_run(self) -> None:
@@ -214,6 +236,18 @@ class ResumeRunController:
             except queue.Empty:
                 break
             self._consume_line(stream, line)
+
+        # Heartbeat for long silent periods (e.g., provider hangs/network stalls)
+        if self.is_running():
+            now = time.time()
+            if now - self._last_output_ts >= 30 and now - self._last_heartbeat_ts >= 30:
+                msg = "No CLI output for 30s. Still running; possible provider/API stall or network timeout."
+                self.logs.append(
+                    LogEntry(ts=now, stream="event", text=msg, level="warn")
+                )
+                if len(self.logs) > self.max_log_lines:
+                    self.logs = self.logs[-self.max_log_lines :]
+                self._last_heartbeat_ts = now
 
         if self._process is not None and self._process.poll() is not None:
             if self.status.state not in {"completed", "failed", "stopped"}:
@@ -292,6 +326,8 @@ class ResumeRunController:
         clean_line = self._normalize_log_line(_strip_ansi(raw_line))
         if not clean_line:
             return
+
+        self._last_output_ts = time.time()
 
         synthetic = self._maybe_emit_synthetic_event(clean_line, stream)
         if synthetic is None:

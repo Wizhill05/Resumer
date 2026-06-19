@@ -49,6 +49,7 @@ type ModelPreset = {
   model: string;
   key_env: string;
   custom_mode?: "openai" | "anthropic";
+  default_api_base?: string;
 };
 
 const MODEL_PRESETS: Record<string, ModelPreset> = {
@@ -83,6 +84,7 @@ const MODEL_PRESETS: Record<string, ModelPreset> = {
     model: "anthropic/gemini-3.5-flash-low",
     key_env: "ANTHROPIC_API_KEY",
     custom_mode: "anthropic",
+    default_api_base: "http://127.0.0.1:8080/",
   },
 };
 
@@ -527,6 +529,7 @@ export default function BatchProcessingPage() {
                     if (p?.custom_mode) {
                       setCustomModel(p.model);
                       setCustomKeyEnv(p.key_env);
+                      setCustomApiBase(p.default_api_base || "");
                     }
                   }}
                   style={selStyle}
@@ -601,7 +604,7 @@ export default function BatchProcessingPage() {
                     type="text"
                     placeholder={
                       preset?.custom_mode === "anthropic"
-                        ? "http://localhost:8080 (no /v1 suffix)"
+                        ? "http://127.0.0.1:8080/ (no /v1 suffix)"
                         : "https://your-provider.example/v1"
                     }
                     value={customApiBase}
